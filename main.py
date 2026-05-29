@@ -1,7 +1,15 @@
-import pandas as pd
 from dash import Dash, Input, Output, dcc, html
-from styles import *
-from tabs import explore, insights, overview, about
+
+from styles import (
+    APP_STYLE,
+    CONTENT_STYLE,
+    SELECTED_TAB_STYLE,
+    SIDEBAR_STYLE,
+    TAB_STYLE,
+    TEXT_PRIMARY,
+    TEXT_SECONDARY,
+)
+from tabs import about, explore, insights, overview
 
 external_stylesheets = [
     "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap",
@@ -10,6 +18,7 @@ external_stylesheets = [
 
 app = Dash(__name__, external_stylesheets=external_stylesheets, suppress_callback_exceptions=True)
 app.title = "Game Market Analyzer"
+overview.register_callbacks(app)
 
 app.layout = html.Div([
     html.Div([

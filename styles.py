@@ -66,3 +66,52 @@ CARD_STYLE = {
     "border": f"1px solid {BORDER_COLOR}",
     "boxShadow": "0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1)"
 }
+
+BUTTON_BASE_STYLE = {
+    "padding": "0.7rem 1rem",
+    "borderRadius": "999px",
+    "border": f"1px solid {BORDER_COLOR}",
+    "backgroundColor": BG_SURFACE,
+    "color": TEXT_SECONDARY,
+    "fontSize": "0.9rem",
+    "fontWeight": "600",
+    "cursor": "pointer",
+    "transition": "all 0.2s ease",
+}
+
+BUTTON_ACTIVE_STYLE = {
+    **BUTTON_BASE_STYLE,
+    "backgroundColor": TEXT_PRIMARY,
+    "border": f"1px solid {TEXT_PRIMARY}",
+    "color": BG_SURFACE,
+}
+
+SECTION_STYLE = {
+    **CARD_STYLE,
+    "padding": "1.75rem",
+    "display": "flex",
+    "flexDirection": "column",
+    "gap": "1.25rem",
+}
+
+BUTTON_ROW_STYLE = {
+    "display": "flex",
+    "gap": "0.75rem",
+    "flexWrap": "wrap",
+}
+
+METRIC_GRID_STYLE = {
+    "display": "grid",
+    "gridTemplateColumns": "repeat(auto-fit, minmax(180px, 1fr))",
+    "gap": "1rem",
+}
+
+METRIC_CARD_STYLE = {
+    **CARD_STYLE,
+    "padding": "1.25rem 1.4rem",
+    "minHeight": "112px",
+}
+
+CARD_VALUE_STYLE = {"fontSize": "1.75rem", "fontWeight": "700", "color": TEXT_PRIMARY}
+CARD_CHANGE_STYLE = {"fontSize": "0.82rem", "fontWeight": "600", "marginTop": "0.55rem"}
+CARD_COMPARISON_STYLE = {"fontSize": "0.78rem", "fontWeight": "500", "marginTop": "0.25rem", "color": TEXT_SECONDARY}
