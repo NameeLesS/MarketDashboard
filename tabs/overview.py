@@ -92,6 +92,8 @@ PEAK_CCU_COMPARISON_ID = "overview-peak-ccu-value-comparison"
 
 MARKET_VALUE_CHART_ID = "overview-estimated-market-value-chart"
 RELATIVE_MARKET_CHART_ID = "overview-relative-market-value-chart"
+PURCHASED_VALUE_CHART_ID = "overview-estimated-purchased-copies-chart"
+RELATIVE_PURCHASED_CHART_ID = "overview-relative-purchased-copies-chart"
 
 
 
@@ -242,6 +244,17 @@ def _bucket_market_value(df, period, start_date, end_date):
     return grouped[grouped["Market value"] > 0]
 
 
+def _bucket_purchased_copies(df, period, start_date, end_date):
+    if df.empty:
+        return pd.DataFrame(columns=["Release date", "Purchased copies"])
+
+    working = df[(df["Release date"] >= start_date) & (df["Release date"] < end_date)].copy()
+    working["Purchased copies"] = working["Owner midpoint"].fillna(0)
+    working["Release date"] = working["Release date"].dt.to_period(_period_frequency(period)).dt.to_timestamp()
+    grouped = working.groupby("Release date")["Purchased copies"].sum().reset_index()
+    return grouped[grouped["Purchased copies"] > 0]
+
+
 def _genre_market_value_buckets(df, period, start_date, end_date):
     if df.empty:
         return pd.DataFrame(columns=["Release date", "Genre", "Market value"])
@@ -262,8 +275,52 @@ def _genre_market_value_buckets(df, period, start_date, end_date):
     return grouped[grouped["Market value"] > 0]
 
 
+def _genre_purchased_copies_buckets(df, period, start_date, end_date):
+    if df.empty:
+        return pd.DataFrame(columns=["Release date", "Genre", "Purchased copies"])
+
+    working = df[(df["Release date"] >= start_date) & (df["Release date"] < end_date)].copy()
+    genre_lists = working["Genres"].fillna("").astype(str).apply(
+        lambda value: [genre.strip() for genre in value.split(",") if genre.strip()]
+    )
+    working["Genre list"] = genre_lists
+    working["Genre count"] = genre_lists.apply(len)
+    working = working[working["Genre count"] > 0].explode("Genre list")
+    working["Release date"] = working["Release date"].dt.to_period(_period_frequency(period)).dt.to_timestamp()
+    working["Purchased copies"] = working["Owner midpoint"].fillna(0) / working["Genre count"]
+    grouped = working.groupby(["Release date", "Genre list"])["Purchased copies"].sum().reset_index()
+    grouped.rename(columns={"Genre list": "Genre"}, inplace=True)
+    return grouped[grouped["Purchased copies"] > 0]
+
+
 def _build_market_value_figure(df, period, start_date, end_date):
     grouped = _bucket_market_value(df, period, start_date, end_date)
+    return timeseries_line_figure(
+        grouped,
+        period=period,
+        y_col="Market value",
+        title="Estimated Market Value",
+        yaxis_title="Market value",
+        hover_template="%{x|%b %d, %Y}<br>Market value: $%{y:,.0f}<extra></extra>",
+        currency=True,
+    )
+
+
+def _build_purchased_copies_figure(df, period, start_date, end_date):
+    grouped = _bucket_purchased_copies(df, period, start_date, end_date)
+    return timeseries_line_figure(
+        grouped,
+        period=period,
+        y_col="Purchased copies",
+        title="Estimated Purchased Copies",
+        yaxis_title="Purchased copies",
+        hover_template="%{x|%b %d, %Y}<br>Purchased copies: %{y:,.0f}<extra></extra>",
+        currency=False,
+    )
+
+
+def timeseries_line_figure(grouped, period, y_col, title, yaxis_title, hover_template, currency=False):
+    """Build a line figure from a grouped dataframe with a datetime 'Release date' index and a numeric y_col."""
     if not grouped.empty:
         index = pd.period_range(
             start=grouped["Release date"].min().to_period(_period_frequency(period)),
@@ -273,7 +330,11 @@ def _build_market_value_figure(df, period, start_date, end_date):
         grouped = grouped.set_index("Release date").reindex(index, fill_value=0).reset_index()
         grouped.rename(columns={"index": "Release date"}, inplace=True)
     x_values = grouped["Release date"].dt.to_pydatetime().tolist() if not grouped.empty else []
-    y_values = grouped["Market value"].tolist() if not grouped.empty else []
+    y_values = grouped[y_col].tolist() if not grouped.empty else []
+
+    yaxis = {"title": yaxis_title, "separatethousands": True, "showgrid": True}
+    if currency:
+        yaxis.update({"tickprefix": "$", "separatethousands": True})
 
     return {
         "data": [
@@ -284,12 +345,12 @@ def _build_market_value_figure(df, period, start_date, end_date):
                 "y": y_values,
                 "line": {"color": ACCENT_COLOR, "width": 3},
                 "marker": {"color": ACCENT_COLOR, "size": 7},
-                "hovertemplate": "%{x|%b %d, %Y}<br>Market value: $%{y:,.0f}<extra></extra>",
-                "name": "Market value",
+                "hovertemplate": hover_template,
+                "name": title,
             }
         ],
         "layout": {
-            "title": {"text": "Estimated Market Value", "x": 0.02, "xanchor": "left"},
+            "title": {"text": title, "x": 0.02, "xanchor": "left"},
             "margin": {"l": 50, "r": 20, "t": 52, "b": 50},
             "paper_bgcolor": "rgba(0,0,0,0)",
             "plot_bgcolor": "rgba(0,0,0,0)",
@@ -300,7 +361,7 @@ def _build_market_value_figure(df, period, start_date, end_date):
                 "showgrid": False,
                 "tickformatstops": _period_tickformatstops(period),
             },
-            "yaxis": {"title": "Market value", "tickprefix": "$", "separatethousands": True, "showgrid": True},
+            "yaxis": yaxis,
             "font": {"family": "Inter, sans-serif", "color": TEXT_PRIMARY},
         },
     }
@@ -308,14 +369,42 @@ def _build_market_value_figure(df, period, start_date, end_date):
 
 def _build_relative_market_value_figure(df, period, selected_genre, start_date, end_date):
     grouped = _genre_market_value_buckets(df, period, start_date, end_date)
+    return relative_barchart_figure(
+        grouped,
+        period=period,
+        value_col="Market value",
+        title="Relative Market Value",
+        yaxis_title="Market value",
+        hover_label="Market value",
+        currency=True,
+        selected_genre=selected_genre,
+    )
+
+
+def _build_relative_purchased_copies_figure(df, period, selected_genre, start_date, end_date):
+    grouped = _genre_purchased_copies_buckets(df, period, start_date, end_date)
+    return relative_barchart_figure(
+        grouped,
+        period=period,
+        value_col="Purchased copies",
+        title="Relative Purchased Copies",
+        yaxis_title="Purchased copies",
+        hover_label="Purchased copies",
+        currency=False,
+        selected_genre=selected_genre,
+    )
+
+
+def relative_barchart_figure(grouped, period, value_col, title, yaxis_title, hover_label, currency=False, selected_genre=None):
+    """Build a stacked relative bar chart with optional highlighted genre and midpoint trend."""
     selected_is_all = not selected_genre or selected_genre == DEFAULT_GENRE
     if selected_is_all:
-        genre_totals = grouped.groupby("Genre")["Market value"].sum().sort_values(ascending=False)
+        genre_totals = grouped.groupby("Genre")[value_col].sum().sort_values(ascending=False)
         ordered_genres = genre_totals.index.tolist()
         highlighted_genre = None
     else:
         highlighted_genre = selected_genre
-        genre_totals = grouped.groupby("Genre")["Market value"].sum().sort_values(ascending=False)
+        genre_totals = grouped.groupby("Genre")[value_col].sum().sort_values(ascending=False)
         ordered_genres = [selected_genre] + [genre for genre in genre_totals.index.tolist() if genre != selected_genre]
 
     traces = []
@@ -337,10 +426,14 @@ def _build_relative_market_value_figure(df, period, selected_genre, start_date, 
             genre_frame = genre_frame.set_index("Release date").reindex(x_index, fill_value=pd.NA).reset_index()
             genre_frame.rename(columns={"index": "Release date"}, inplace=True)
         else:
-            genre_frame = pd.DataFrame({"Release date": [], "Market value": []})
-        values = genre_frame["Market value"].fillna(0).tolist()
+            genre_frame = pd.DataFrame({"Release date": [], value_col: []})
+        values = genre_frame[value_col].fillna(0).tolist()
         is_highlighted = genre == highlighted_genre
         color = ACCENT_COLOR if is_highlighted else GENRE_PALETTE[index % len(GENRE_PALETTE)]
+
+        hoverfmt = f"{genre}<br>%{{x|%b %d, %Y}}<br>{hover_label}: %{{y:,.0f}}<extra></extra>"
+        if currency:
+            hoverfmt = f"{genre}<br>%{{x|%b %d, %Y}}<br>{hover_label}: $%{{y:,.0f}}<extra></extra>"
 
         traces.append(
             {
@@ -353,7 +446,7 @@ def _build_relative_market_value_figure(df, period, selected_genre, start_date, 
                     "line": {"color": "#0f172a" if is_highlighted else color, "width": 1.4 if is_highlighted else 0.5},
                     "opacity": 0.96 if is_highlighted else 0.68,
                 },
-                "hovertemplate": f"{genre}<br>%{{x|%b %d, %Y}}<br>Market value: $%{{y:,.0f}}<extra></extra>",
+                "hovertemplate": hoverfmt,
             }
         )
 
@@ -372,10 +465,14 @@ def _build_relative_market_value_figure(df, period, selected_genre, start_date, 
                 }
             )
 
+    yaxis = {"title": yaxis_title, "separatethousands": True, "showgrid": True}
+    if currency:
+        yaxis.update({"tickprefix": "$", "separatethousands": True})
+
     return {
         "data": traces,
         "layout": {
-            "title": {"text": "Relative Market Value", "x": 0.02, "xanchor": "left"},
+            "title": {"text": title, "x": 0.02, "xanchor": "left"},
             "margin": {"l": 50, "r": 20, "t": 52, "b": 50},
             "paper_bgcolor": "rgba(0,0,0,0)",
             "plot_bgcolor": "rgba(0,0,0,0)",
@@ -387,7 +484,7 @@ def _build_relative_market_value_figure(df, period, selected_genre, start_date, 
                 "showgrid": False,
                 "tickformatstops": _period_tickformatstops(period),
             },
-            "yaxis": {"title": "Market value", "tickprefix": "$", "separatethousands": True, "showgrid": True},
+            "yaxis": yaxis,
             "showlegend": False,
             "font": {"family": "Inter, sans-serif", "color": TEXT_PRIMARY},
         },
@@ -458,6 +555,9 @@ def _build_metric_card(label, value_id, default_value):
     )
 
 
+
+
+# TODO: Change this in the future because now this does not make, it should use the full data range and not thte part of it
 default_start_date, default_end_date = _period_window(DEFAULT_PERIOD, END_RANGE)
 default_period_games = _filter_games(games, DEFAULT_GENRE, default_start_date, default_end_date)
 history_start_date = games["Release date"].min().normalize()
@@ -475,6 +575,21 @@ default_relative_market_value_figure = _build_relative_market_value_figure(
     default_range_start_date,
     END_RANGE,
 )
+default_purchased_copies_figure = _build_purchased_copies_figure(
+    _filter_games(games, DEFAULT_GENRE, default_range_start_date, END_RANGE),
+    DEFAULT_PERIOD,
+    default_range_start_date,
+    END_RANGE,
+)
+default_relative_purchased_copies_figure = _build_relative_purchased_copies_figure(
+    _filter_games(games, DEFAULT_GENRE, default_range_start_date, END_RANGE),
+    DEFAULT_PERIOD,
+    DEFAULT_GENRE,
+    default_range_start_date,
+    END_RANGE,
+)
+# END TODO
+
 
 
 layout = html.Div(
@@ -579,6 +694,37 @@ layout = html.Div(
                     ],
                     style=CHART_ROW_STYLE,
                 ),
+                html.Div(
+                    [
+                        html.Div(
+                            [
+                                dcc.Graph(
+                                    id=PURCHASED_VALUE_CHART_ID,
+                                    figure=default_purchased_copies_figure,
+                                    style=CHART_STYLE,
+                                    config={"displayModeBar": False, "responsive": True},
+                                )
+                            ],
+                            style=CHART_CARD_STYLE,
+                        ),
+                        html.Div(
+                            [
+                                dcc.Graph(
+                                    id=RELATIVE_PURCHASED_CHART_ID,
+                                    figure=default_relative_purchased_copies_figure,
+                                    style=CHART_STYLE,
+                                    config={"displayModeBar": False, "responsive": True},
+                                )
+                            ],
+                            style=CHART_CARD_STYLE,
+                        ),
+                    ],
+                    style=CHART_ROW_STYLE,
+                ),
+                html.Div(
+                    "Game characteristics",
+                    style={"fontSize": "1.25rem", "fontWeight": "700", "color": TEXT_PRIMARY, "marginTop": "0.5rem"},
+                ),
             ],
             style=SECTION_STYLE,
         ),
@@ -638,6 +784,8 @@ def register_callbacks(app):
         Output(PEAK_CCU_VALUE_ID, "children"),
         Output(MARKET_VALUE_CHART_ID, "figure"),
         Output(RELATIVE_MARKET_CHART_ID, "figure"),
+        Output(PURCHASED_VALUE_CHART_ID, "figure"),
+        Output(RELATIVE_PURCHASED_CHART_ID, "figure"),
         Output(GAMES_CHANGE_ID, "children"),
         Output(MARKET_CHANGE_ID, "children"),
         Output(PURCHASED_CHANGE_ID, "children"),
@@ -677,6 +825,19 @@ def register_callbacks(app):
             END_RANGE,
         )
         relative_market_value_figure = _build_relative_market_value_figure(
+            _filter_games(games, DEFAULT_GENRE, range_start_date, END_RANGE),
+            selected_period,
+            selected_genre,
+            range_start_date,
+            END_RANGE,
+        )
+        purchased_copies_figure = _build_purchased_copies_figure(
+            _filter_games(games, selected_genre, range_start_date, END_RANGE),
+            selected_period,
+            range_start_date,
+            END_RANGE,
+        )
+        relative_purchased_copies_figure = _build_relative_purchased_copies_figure(
             _filter_games(games, DEFAULT_GENRE, range_start_date, END_RANGE),
             selected_period,
             selected_genre,
@@ -733,6 +894,8 @@ def register_callbacks(app):
             peak_ccu_text,
             market_value_figure,
             relative_market_value_figure,
+            purchased_copies_figure,
+            relative_purchased_copies_figure,
             games_change_text,
             market_change_text,
             purchased_change_text,
