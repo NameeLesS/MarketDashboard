@@ -122,6 +122,24 @@ CHART_ROW_STYLE = {
     "gap": "1rem",
 }
 
+PIE_ROW_STYLE = {
+    "display": "grid",
+    "gridTemplateColumns": "repeat(4, minmax(0, 1fr))",
+    "gap": "0.75rem",
+}
+
+PIE_CARD_STYLE = {
+    "backgroundColor": "#ffffff",
+    "borderRadius": "12px",
+    "padding": "0.75rem 0.8rem 0.35rem",
+    "border": "1px solid #e2e8f0",
+    "boxShadow": "0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1)",
+    "minHeight": "320px",
+}
+
+PIE_GRAPH_STYLE = {"height": "240px"}
+
+
 RANGE_ROW_STYLE = {
     "display": "flex",
     "flexWrap": "wrap",

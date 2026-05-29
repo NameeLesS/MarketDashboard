@@ -17,6 +17,9 @@ from styles import (
     GENRE_PALETTE,
     METRIC_CARD_STYLE,
     METRIC_GRID_STYLE,
+    PIE_CARD_STYLE,
+    PIE_GRAPH_STYLE,
+    PIE_ROW_STYLE,
     RANGE_ROW_STYLE,
     SECTION_STYLE,
     TEXT_PRIMARY,
@@ -94,7 +97,10 @@ MARKET_VALUE_CHART_ID = "overview-estimated-market-value-chart"
 RELATIVE_MARKET_CHART_ID = "overview-relative-market-value-chart"
 PURCHASED_VALUE_CHART_ID = "overview-estimated-purchased-copies-chart"
 RELATIVE_PURCHASED_CHART_ID = "overview-relative-purchased-copies-chart"
-
+GAME_TYPE_PIE_ID = "overview-game-type-pie-chart"
+PLATFORM_PIE_ID = "overview-platform-pie-chart"
+CONTROLLER_PIE_ID = "overview-controller-pie-chart"
+VR_PIE_ID = "overview-vr-pie-chart"
 
 
 genre_options = [{"label": DEFAULT_GENRE, "value": DEFAULT_GENRE}] + [
@@ -253,6 +259,141 @@ def _bucket_purchased_copies(df, period, start_date, end_date):
     working["Release date"] = working["Release date"].dt.to_period(_period_frequency(period)).dt.to_timestamp()
     grouped = working.groupby("Release date")["Purchased copies"].sum().reset_index()
     return grouped[grouped["Purchased copies"] > 0]
+
+
+def _category_items(value):
+    return {item.strip().lower() for item in str(value).split(",") if item.strip()}
+
+
+def _has_any_category(value, terms):
+    normalized = _category_items(value)
+    return any(term.strip().lower() in normalized for term in terms)
+
+
+def _build_pie_figure(labels, values, title, colors):
+    return {
+        "data": [
+            {
+                "type": "pie",
+                "labels": labels,
+                "values": values,
+                "marker": {"colors": colors},
+                "textinfo": "none",
+                "sort": False,
+                "direction": "clockwise",
+                "hole": 0.34,
+                "hovertemplate": "%{label}<br>%{value:,}<br>%{percent}<extra></extra>",
+            }
+        ],
+        "layout": {
+            "title": {"text": title, "x": 0.02, "xanchor": "left", "font": {"size": 16}},
+            "margin": {"l": 12, "r": 140, "t": 40, "b": 12},
+            "paper_bgcolor": "rgba(0,0,0,0)",
+            "plot_bgcolor": "rgba(0,0,0,0)",
+            "showlegend": True,
+            "legend": {
+                "x": 1.01,
+                "y": 1,
+                "xanchor": "left",
+                "yanchor": "top",
+                "orientation": "v",
+                "font": {"size": 11},
+            },
+            "font": {"family": "Inter, sans-serif", "color": TEXT_PRIMARY},
+        },
+    }
+
+
+def _legend_labels_with_percentages(labels, values):
+    total = sum(values)
+    if total <= 0:
+        return [f"{label} (0.0%)" for label in labels]
+
+    return [f"{label} ({(value / total) * 100:.1f}%)" for label, value in zip(labels, values)]
+
+
+def _build_game_type_pie_figure(df):
+    category_series = df["Categories"].fillna("").astype(str)
+    singleplayer_terms = {"Single-player"}
+    multiplayer_terms = {
+        "Multi-player",
+        "PvP",
+        "Online PvP",
+        "Remote Play Together",
+        "Cross-Platform Multiplayer",
+        "MMO",
+        "LAN PvP",
+    }
+    coop_terms = {
+        "Co-op",
+        "Remote Play Together",
+        "Online Co-op",
+        "Shared/Split Screen Co-op",
+        "LAN Co-op",
+    }
+
+    values = [
+        int(category_series.apply(lambda value: _has_any_category(value, singleplayer_terms)).sum()),
+        int(category_series.apply(lambda value: _has_any_category(value, multiplayer_terms)).sum()),
+        int(category_series.apply(lambda value: _has_any_category(value, coop_terms)).sum()),
+    ]
+    labels = ["Singleplayer", "Multiplayer", "Co-op"]
+    return _build_pie_figure(
+        _legend_labels_with_percentages(labels, values),
+        values,
+        "Game Type",
+        ["#2563eb", "#f59e0b", "#10b981"],
+    )
+
+
+def _build_platform_pie_figure(df):
+    windows = df["Windows"].fillna(False).astype(bool)
+    linux = df["Linux"].fillna(False).astype(bool)
+    mac = df["Mac"].fillna(False).astype(bool)
+
+    values = [
+        int((windows & ~linux & ~mac).sum()),
+        int((windows & linux & mac).sum()),
+        int((windows & linux & ~mac).sum()),
+        int((windows & ~linux & mac).sum()),
+    ]
+    labels = ["Windows only", "Windows + Linux + Mac", "Windows + Linux", "Windows + Mac"]
+    return _build_pie_figure(
+        _legend_labels_with_percentages(labels, values),
+        values,
+        "Supported Platforms",
+        ["#3b82f6", "#8b5cf6", "#22c55e", "#f97316"],
+    )
+
+
+def _build_controller_support_pie_figure(df):
+    supported_terms = {
+        "Full controller support",
+        "Partial controller support",
+        "Tracked Controller Support",
+    }
+    supported = df["Categories"].fillna("").astype(str).apply(lambda value: _has_any_category(value, supported_terms))
+    values = [int(supported.sum()), int((~supported).sum())]
+    labels = ["Yes", "No"]
+    return _build_pie_figure(
+        _legend_labels_with_percentages(labels, values),
+        values,
+        "Controller Support",
+        ["#14b8a6", "#ef4444"],
+    )
+
+
+def _build_vr_support_pie_figure(df):
+    supported_terms = {"VR Only", "VR Supported", "VR Support", "SteamVR Collectibles"}
+    supported = df["Categories"].fillna("").astype(str).apply(lambda value: _has_any_category(value, supported_terms))
+    values = [int(supported.sum()), int((~supported).sum())]
+    labels = ["Yes", "No"]
+    return _build_pie_figure(
+        _legend_labels_with_percentages(labels, values),
+        values,
+        "VR Support",
+        ["#a855f7", "#64748b"],
+    )
 
 
 def _genre_market_value_buckets(df, period, start_date, end_date):
@@ -588,6 +729,10 @@ default_relative_purchased_copies_figure = _build_relative_purchased_copies_figu
     default_range_start_date,
     END_RANGE,
 )
+default_game_type_pie_figure = _build_game_type_pie_figure(default_period_games)
+default_platform_pie_figure = _build_platform_pie_figure(default_period_games)
+default_controller_pie_figure = _build_controller_support_pie_figure(default_period_games)
+default_vr_pie_figure = _build_vr_support_pie_figure(default_period_games)
 # END TODO
 
 
@@ -722,8 +867,57 @@ layout = html.Div(
                     style=CHART_ROW_STYLE,
                 ),
                 html.Div(
-                    "Game characteristics",
+                    "Game Characteristics",
                     style={"fontSize": "1.25rem", "fontWeight": "700", "color": TEXT_PRIMARY, "marginTop": "0.5rem"},
+                ),
+                html.Div(
+                    [
+                        html.Div(
+                            [
+                                dcc.Graph(
+                                    id=GAME_TYPE_PIE_ID,
+                                    figure=default_game_type_pie_figure,
+                                    style=PIE_GRAPH_STYLE,
+                                    config={"displayModeBar": False, "responsive": True},
+                                )
+                            ],
+                            style=PIE_CARD_STYLE,
+                        ),
+                        html.Div(
+                            [
+                                dcc.Graph(
+                                    id=PLATFORM_PIE_ID,
+                                    figure=default_platform_pie_figure,
+                                    style=PIE_GRAPH_STYLE,
+                                    config={"displayModeBar": False, "responsive": True},
+                                )
+                            ],
+                            style=PIE_CARD_STYLE,
+                        ),
+                        html.Div(
+                            [
+                                dcc.Graph(
+                                    id=CONTROLLER_PIE_ID,
+                                    figure=default_controller_pie_figure,
+                                    style=PIE_GRAPH_STYLE,
+                                    config={"displayModeBar": False, "responsive": True},
+                                )
+                            ],
+                            style=PIE_CARD_STYLE,
+                        ),
+                        html.Div(
+                            [
+                                dcc.Graph(
+                                    id=VR_PIE_ID,
+                                    figure=default_vr_pie_figure,
+                                    style=PIE_GRAPH_STYLE,
+                                    config={"displayModeBar": False, "responsive": True},
+                                )
+                            ],
+                            style=PIE_CARD_STYLE,
+                        ),
+                    ],
+                    style=PIE_ROW_STYLE,
                 ),
             ],
             style=SECTION_STYLE,
@@ -786,6 +980,10 @@ def register_callbacks(app):
         Output(RELATIVE_MARKET_CHART_ID, "figure"),
         Output(PURCHASED_VALUE_CHART_ID, "figure"),
         Output(RELATIVE_PURCHASED_CHART_ID, "figure"),
+        Output(GAME_TYPE_PIE_ID, "figure"),
+        Output(PLATFORM_PIE_ID, "figure"),
+        Output(CONTROLLER_PIE_ID, "figure"),
+        Output(VR_PIE_ID, "figure"),
         Output(GAMES_CHANGE_ID, "children"),
         Output(MARKET_CHANGE_ID, "children"),
         Output(PURCHASED_CHANGE_ID, "children"),
@@ -844,6 +1042,11 @@ def register_callbacks(app):
             range_start_date,
             END_RANGE,
         )
+        filtered_for_pies = _filter_games(games, selected_genre, range_start_date, END_RANGE)
+        game_type_pie_figure = _build_game_type_pie_figure(filtered_for_pies)
+        platform_pie_figure = _build_platform_pie_figure(filtered_for_pies)
+        controller_pie_figure = _build_controller_support_pie_figure(filtered_for_pies)
+        vr_pie_figure = _build_vr_support_pie_figure(filtered_for_pies)
         previous_start, previous_end = _period_window(selected_period, start_date)
         previous_filtered = _filter_games(games, selected_genre, previous_start, previous_end)
 
@@ -896,6 +1099,10 @@ def register_callbacks(app):
             relative_market_value_figure,
             purchased_copies_figure,
             relative_purchased_copies_figure,
+            game_type_pie_figure,
+            platform_pie_figure,
+            controller_pie_figure,
+            vr_pie_figure,
             games_change_text,
             market_change_text,
             purchased_change_text,
