@@ -115,3 +115,39 @@ METRIC_CARD_STYLE = {
 CARD_VALUE_STYLE = {"fontSize": "1.75rem", "fontWeight": "700", "color": TEXT_PRIMARY}
 CARD_CHANGE_STYLE = {"fontSize": "0.82rem", "fontWeight": "600", "marginTop": "0.55rem"}
 CARD_COMPARISON_STYLE = {"fontSize": "0.78rem", "fontWeight": "500", "marginTop": "0.25rem", "color": TEXT_SECONDARY}
+
+CHART_ROW_STYLE = {
+    "display": "grid",
+    "gridTemplateColumns": "repeat(auto-fit, minmax(420px, 1fr))",
+    "gap": "1rem",
+}
+
+RANGE_ROW_STYLE = {
+    "display": "flex",
+    "flexWrap": "wrap",
+    "gap": "0.75rem",
+}
+
+CHART_CARD_STYLE = {
+    "backgroundColor": "#ffffff",
+    "borderRadius": "12px",
+    "padding": "1rem 1rem 0.5rem",
+    "border": "1px solid #e2e8f0",
+    "boxShadow": "0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1)",
+    "minHeight": "460px",
+}
+
+CHART_STYLE = {"height": "380px"}
+
+GENRE_PALETTE = [
+    "#3b82f6",
+    "#06b6d4",
+    "#10b981",
+    "#f59e0b",
+    "#ef4444",
+    "#8b5cf6",
+    "#14b8a6",
+    "#f97316",
+    "#84cc16",
+    "#ec4899",
+]

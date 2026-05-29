@@ -4,14 +4,20 @@ import pandas as pd
 from dash import Input, Output, ctx, dcc, html, no_update
 
 from styles import (
+    ACCENT_COLOR,
     BUTTON_ACTIVE_STYLE,
     BUTTON_BASE_STYLE,
     BUTTON_ROW_STYLE,
     CARD_CHANGE_STYLE,
     CARD_COMPARISON_STYLE,
     CARD_VALUE_STYLE,
+    CHART_CARD_STYLE,
+    CHART_ROW_STYLE,
+    CHART_STYLE,
+    GENRE_PALETTE,
     METRIC_CARD_STYLE,
     METRIC_GRID_STYLE,
+    RANGE_ROW_STYLE,
     SECTION_STYLE,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
@@ -54,12 +60,20 @@ desc = 'A high-level view of the gaming market.'
 END_RANGE = games['Release date'].max()
 DEFAULT_GENRE = "All genres"
 DEFAULT_PERIOD = "year"
+DEFAULT_RANGE = "last-6-years"
 
 GENRE_DROPDOWN_ID = "overview-genre-dropdown"
 PERIOD_STORE_ID = "overview-period-store"
+RANGE_STORE_ID = "overview-range-store"
 MONTH_BUTTON_ID = "overview-period-month"
 QUARTER_BUTTON_ID = "overview-period-quarter"
 YEAR_BUTTON_ID = "overview-period-year"
+RANGE_6M_BUTTON_ID = "overview-range-6m"
+RANGE_1Y_BUTTON_ID = "overview-range-1y"
+RANGE_3Y_BUTTON_ID = "overview-range-3y"
+RANGE_6Y_BUTTON_ID = "overview-range-6y"
+RANGE_10Y_BUTTON_ID = "overview-range-10y"
+RANGE_ALL_BUTTON_ID = "overview-range-all"
 GAMES_VALUE_ID = "overview-games-released-value"
 GAMES_CHANGE_ID = "overview-games-released-value-change"
 GAMES_COMPARISON_ID = "overview-games-released-value-comparison"
@@ -75,6 +89,10 @@ PLAYTIME_COMPARISON_ID = "overview-average-playtime-value-comparison"
 PEAK_CCU_VALUE_ID = "overview-peak-ccu-value"
 PEAK_CCU_CHANGE_ID = "overview-peak-ccu-value-change"
 PEAK_CCU_COMPARISON_ID = "overview-peak-ccu-value-comparison"
+
+MARKET_VALUE_CHART_ID = "overview-estimated-market-value-chart"
+RELATIVE_MARKET_CHART_ID = "overview-relative-market-value-chart"
+
 
 
 genre_options = [{"label": DEFAULT_GENRE, "value": DEFAULT_GENRE}] + [
@@ -126,6 +144,254 @@ def _comparison_text(period, value, formatter):
     label = _comparison_label(period)
     formatted_value = formatter(value) if pd.notna(value) else "N/A"
     return f"{label}: {formatted_value}"
+
+
+def _period_frequency(period):
+    return {
+        "month": "M",
+        "quarter": "Q",
+        "year": "Y",
+    }[period]
+
+
+def _period_axis_label(period):
+    return {
+        "month": "Month",
+        "quarter": "Quarter",
+        "year": "Year",
+    }[period]
+
+
+def _period_tick_format(period):
+    return {
+        "month": "%B %Y",
+        "quarter": "%Y",
+        "year": "%Y",
+    }[period]
+
+
+def _period_tick_labels(period, timestamps):
+    if period == "month":
+        return [timestamp.strftime("%B %Y") for timestamp in timestamps]
+    if period == "quarter":
+        return [f"Q{((timestamp.month - 1) // 3) + 1} {timestamp.year}" for timestamp in timestamps]
+    return [timestamp.strftime("%Y") for timestamp in timestamps]
+
+
+def _period_tickformatstops(period):
+    if period == "month":
+        return [
+            {"dtickrange": [None, "M1"], "value": "%Y"},
+            {"dtickrange": ["M1", "M12"], "value": "%B %Y"},
+            {"dtickrange": ["M12", None], "value": "%Y"},
+        ]
+    if period == "quarter":
+        return [
+            {"dtickrange": [None, "M3"], "value": "%Y"},
+            {"dtickrange": ["M3", "M12"], "value": "Q%q %Y"},
+            {"dtickrange": ["M12", None], "value": "%Y"},
+        ]
+    return [
+        {"dtickrange": [None, "M12"], "value": "%Y"},
+        {"dtickrange": ["M12", None], "value": "%Y"},
+    ]
+
+
+def _range_start_date(range_key):
+    history_start = games["Release date"].min().normalize()
+    end_date = END_RANGE.normalize()
+    if range_key == "last-6-months":
+        return (end_date - pd.DateOffset(months=6)).normalize()
+    if range_key == "last-year":
+        return (end_date - pd.DateOffset(years=1)).normalize()
+    if range_key == "last-3-years":
+        return (end_date - pd.DateOffset(years=3)).normalize()
+    if range_key == "last-6-years":
+        return (end_date - pd.DateOffset(years=6)).normalize()
+    if range_key == "last-10-years":
+        return (end_date - pd.DateOffset(years=10)).normalize()
+    if range_key == "all-data":
+        return history_start
+    raise ValueError(f"Unknown range: {range_key}")
+
+
+def _range_label(range_key):
+    return {
+        "last-6-months": "Last 6 Months",
+        "last-year": "Last Year",
+        "last-3-years": "Last 3 Years",
+        "last-6-years": "Last 6 Years",
+        "last-10-years": "Last 10 Years",
+        "all-data": "All Data",
+    }[range_key]
+
+
+def _bucket_market_value(df, period, start_date, end_date):
+    if df.empty:
+        return pd.DataFrame(columns=["Release date", "Market value"])
+
+    working = df[(df["Release date"] >= start_date) & (df["Release date"] < end_date)]
+    working["Market value"] = working["Owner midpoint"].fillna(0) * working["Price"].fillna(0)
+    working["Release date"] = working["Release date"].dt.to_period(_period_frequency(period)).dt.to_timestamp()
+    grouped = (
+        working.groupby("Release date")
+        ["Market value"]
+        .sum()
+        .reset_index()
+    )
+    return grouped[grouped["Market value"] > 0]
+
+
+def _genre_market_value_buckets(df, period, start_date, end_date):
+    if df.empty:
+        return pd.DataFrame(columns=["Release date", "Genre", "Market value"])
+
+    working = df[(df["Release date"] >= start_date) & (df["Release date"] < end_date)]
+    genre_lists = working["Genres"].fillna("").astype(str).apply(
+        lambda value: [genre.strip() for genre in value.split(",") if genre.strip()]
+    )
+    working["Genre list"] = genre_lists
+    working["Genre count"] = genre_lists.apply(len)
+    working = working[working["Genre count"] > 0].explode("Genre list")
+    working["Release date"] = working["Release date"].dt.to_period(_period_frequency(period)).dt.to_timestamp()
+    working["Market value"] = (
+        working["Owner midpoint"].fillna(0) * working["Price"].fillna(0) / working["Genre count"]
+    )
+    grouped = working.groupby(["Release date", "Genre list"])["Market value"].sum().reset_index()
+    grouped.rename(columns={"Genre list": "Genre"}, inplace=True)
+    return grouped[grouped["Market value"] > 0]
+
+
+def _build_market_value_figure(df, period, start_date, end_date):
+    grouped = _bucket_market_value(df, period, start_date, end_date)
+    if not grouped.empty:
+        index = pd.period_range(
+            start=grouped["Release date"].min().to_period(_period_frequency(period)),
+            end=grouped["Release date"].max().to_period(_period_frequency(period)),
+            freq=_period_frequency(period),
+        ).to_timestamp()
+        grouped = grouped.set_index("Release date").reindex(index, fill_value=0).reset_index()
+        grouped.rename(columns={"index": "Release date"}, inplace=True)
+    x_values = grouped["Release date"].dt.to_pydatetime().tolist() if not grouped.empty else []
+    y_values = grouped["Market value"].tolist() if not grouped.empty else []
+
+    return {
+        "data": [
+            {
+                "type": "scatter",
+                "mode": "lines+markers",
+                "x": x_values,
+                "y": y_values,
+                "line": {"color": ACCENT_COLOR, "width": 3},
+                "marker": {"color": ACCENT_COLOR, "size": 7},
+                "hovertemplate": "%{x|%b %d, %Y}<br>Market value: $%{y:,.0f}<extra></extra>",
+                "name": "Market value",
+            }
+        ],
+        "layout": {
+            "title": {"text": "Estimated Market Value", "x": 0.02, "xanchor": "left"},
+            "margin": {"l": 50, "r": 20, "t": 52, "b": 50},
+            "paper_bgcolor": "rgba(0,0,0,0)",
+            "plot_bgcolor": "rgba(0,0,0,0)",
+            "hovermode": "x unified",
+            "xaxis": {
+                "title": _period_axis_label(period),
+                "type": "date",
+                "showgrid": False,
+                "tickformatstops": _period_tickformatstops(period),
+            },
+            "yaxis": {"title": "Market value", "tickprefix": "$", "separatethousands": True, "showgrid": True},
+            "font": {"family": "Inter, sans-serif", "color": TEXT_PRIMARY},
+        },
+    }
+
+
+def _build_relative_market_value_figure(df, period, selected_genre, start_date, end_date):
+    grouped = _genre_market_value_buckets(df, period, start_date, end_date)
+    selected_is_all = not selected_genre or selected_genre == DEFAULT_GENRE
+    if selected_is_all:
+        genre_totals = grouped.groupby("Genre")["Market value"].sum().sort_values(ascending=False)
+        ordered_genres = genre_totals.index.tolist()
+        highlighted_genre = None
+    else:
+        highlighted_genre = selected_genre
+        genre_totals = grouped.groupby("Genre")["Market value"].sum().sort_values(ascending=False)
+        ordered_genres = [selected_genre] + [genre for genre in genre_totals.index.tolist() if genre != selected_genre]
+
+    traces = []
+    if not grouped.empty:
+        x_index = pd.period_range(
+            start=grouped["Release date"].min().to_period(_period_frequency(period)),
+            end=grouped["Release date"].max().to_period(_period_frequency(period)),
+            freq=_period_frequency(period),
+        ).to_timestamp()
+    else:
+        x_index = pd.DatetimeIndex([])
+    x_values = x_index.to_pydatetime().tolist()
+
+    for index, genre in enumerate(ordered_genres):
+        genre_frame = grouped[grouped["Genre"] == genre]
+        if genre_frame.empty and genre != highlighted_genre:
+            continue
+        if len(x_index) > 0:
+            genre_frame = genre_frame.set_index("Release date").reindex(x_index, fill_value=pd.NA).reset_index()
+            genre_frame.rename(columns={"index": "Release date"}, inplace=True)
+        else:
+            genre_frame = pd.DataFrame({"Release date": [], "Market value": []})
+        values = genre_frame["Market value"].fillna(0).tolist()
+        is_highlighted = genre == highlighted_genre
+        color = ACCENT_COLOR if is_highlighted else GENRE_PALETTE[index % len(GENRE_PALETTE)]
+
+        traces.append(
+            {
+                "type": "bar",
+                "name": genre,
+                "x": x_values,
+                "y": values,
+                "marker": {
+                    "color": color,
+                    "line": {"color": "#0f172a" if is_highlighted else color, "width": 1.4 if is_highlighted else 0.5},
+                    "opacity": 0.96 if is_highlighted else 0.68,
+                },
+                "hovertemplate": f"{genre}<br>%{{x|%b %d, %Y}}<br>Market value: $%{{y:,.0f}}<extra></extra>",
+            }
+        )
+
+        if is_highlighted:
+            midpoint_values = [value / 2 for value in values]
+            traces.append(
+                {
+                    "type": "scatter",
+                    "mode": "lines+markers",
+                    "name": f"{genre} trend",
+                    "x": x_values,
+                    "y": midpoint_values,
+                    "line": {"color": "#0f172a", "width": 3},
+                    "marker": {"color": "#0f172a", "size": 6},
+                    "hoverinfo": "skip",
+                }
+            )
+
+    return {
+        "data": traces,
+        "layout": {
+            "title": {"text": "Relative Market Value", "x": 0.02, "xanchor": "left"},
+            "margin": {"l": 50, "r": 20, "t": 52, "b": 50},
+            "paper_bgcolor": "rgba(0,0,0,0)",
+            "plot_bgcolor": "rgba(0,0,0,0)",
+            "barmode": "stack",
+            "hovermode": "closest",
+            "xaxis": {
+                "title": _period_axis_label(period),
+                "type": "date",
+                "showgrid": False,
+                "tickformatstops": _period_tickformatstops(period),
+            },
+            "yaxis": {"title": "Market value", "tickprefix": "$", "separatethousands": True, "showgrid": True},
+            "showlegend": False,
+            "font": {"family": "Inter, sans-serif", "color": TEXT_PRIMARY},
+        },
+    }
 
 
 def _filter_games(df, genre, start_date, end_date):
@@ -192,9 +458,29 @@ def _build_metric_card(label, value_id, default_value):
     )
 
 
+default_start_date, default_end_date = _period_window(DEFAULT_PERIOD, END_RANGE)
+default_period_games = _filter_games(games, DEFAULT_GENRE, default_start_date, default_end_date)
+history_start_date = games["Release date"].min().normalize()
+default_range_start_date = _range_start_date(DEFAULT_RANGE)
+default_market_value_figure = _build_market_value_figure(
+    _filter_games(games, DEFAULT_GENRE, default_range_start_date, END_RANGE),
+    DEFAULT_PERIOD,
+    default_range_start_date,
+    END_RANGE,
+)
+default_relative_market_value_figure = _build_relative_market_value_figure(
+    _filter_games(games, DEFAULT_GENRE, default_range_start_date, END_RANGE),
+    DEFAULT_PERIOD,
+    DEFAULT_GENRE,
+    default_range_start_date,
+    END_RANGE,
+)
+
+
 layout = html.Div(
     [
         dcc.Store(id=PERIOD_STORE_ID, data=DEFAULT_PERIOD),
+        dcc.Store(id=RANGE_STORE_ID, data=DEFAULT_RANGE),
         html.Div(
             [
                 html.H2(
@@ -255,6 +541,44 @@ layout = html.Div(
                     ],
                     style=METRIC_GRID_STYLE,
                 ),
+                html.Div(
+                    [
+                        html.Button("Last 6 Months", id=RANGE_6M_BUTTON_ID, n_clicks=0, style=BUTTON_BASE_STYLE),
+                        html.Button("Last Year", id=RANGE_1Y_BUTTON_ID, n_clicks=0, style=BUTTON_ACTIVE_STYLE),
+                        html.Button("Last 3 Years", id=RANGE_3Y_BUTTON_ID, n_clicks=0, style=BUTTON_BASE_STYLE),
+                        html.Button("Last 6 Years", id=RANGE_6Y_BUTTON_ID, n_clicks=0, style=BUTTON_BASE_STYLE),
+                        html.Button("Last 10 Years", id=RANGE_10Y_BUTTON_ID, n_clicks=0, style=BUTTON_BASE_STYLE),
+                        html.Button("All Data", id=RANGE_ALL_BUTTON_ID, n_clicks=0, style=BUTTON_BASE_STYLE),
+                    ],
+                    style=RANGE_ROW_STYLE,
+                ),
+                html.Div(
+                    [
+                        html.Div(
+                            [
+                                dcc.Graph(
+                                    id=MARKET_VALUE_CHART_ID,
+                                    figure=default_market_value_figure,
+                                    style=CHART_STYLE,
+                                    config={"displayModeBar": False, "responsive": True},
+                                )
+                            ],
+                            style=CHART_CARD_STYLE,
+                        ),
+                        html.Div(
+                            [
+                                dcc.Graph(
+                                    id=RELATIVE_MARKET_CHART_ID,
+                                    figure=default_relative_market_value_figure,
+                                    style=CHART_STYLE,
+                                    config={"displayModeBar": False, "responsive": True},
+                                )
+                            ],
+                            style=CHART_CARD_STYLE,
+                        ),
+                    ],
+                    style=CHART_ROW_STYLE,
+                ),
             ],
             style=SECTION_STYLE,
         ),
@@ -281,11 +605,39 @@ def register_callbacks(app):
         return no_update
 
     @app.callback(
+        Output(RANGE_STORE_ID, "data"),
+        Input(RANGE_6M_BUTTON_ID, "n_clicks"),
+        Input(RANGE_1Y_BUTTON_ID, "n_clicks"),
+        Input(RANGE_3Y_BUTTON_ID, "n_clicks"),
+        Input(RANGE_6Y_BUTTON_ID, "n_clicks"),
+        Input(RANGE_10Y_BUTTON_ID, "n_clicks"),
+        Input(RANGE_ALL_BUTTON_ID, "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def set_range(_, __, ___, ____, _____, ______):
+        triggered = ctx.triggered_id
+        if triggered == RANGE_6M_BUTTON_ID:
+            return "last-6-months"
+        if triggered == RANGE_1Y_BUTTON_ID:
+            return "last-year"
+        if triggered == RANGE_3Y_BUTTON_ID:
+            return "last-3-years"
+        if triggered == RANGE_6Y_BUTTON_ID:
+            return "last-6-years"
+        if triggered == RANGE_10Y_BUTTON_ID:
+            return "last-10-years"
+        if triggered == RANGE_ALL_BUTTON_ID:
+            return "all-data"
+        return no_update
+
+    @app.callback(
         Output(GAMES_VALUE_ID, "children"),
         Output(MARKET_VALUE_ID, "children"),
         Output(PURCHASED_VALUE_ID, "children"),
         Output(PLAYTIME_VALUE_ID, "children"),
         Output(PEAK_CCU_VALUE_ID, "children"),
+        Output(MARKET_VALUE_CHART_ID, "figure"),
+        Output(RELATIVE_MARKET_CHART_ID, "figure"),
         Output(GAMES_CHANGE_ID, "children"),
         Output(MARKET_CHANGE_ID, "children"),
         Output(PURCHASED_CHANGE_ID, "children"),
@@ -304,12 +656,33 @@ def register_callbacks(app):
         Output(MONTH_BUTTON_ID, "style"),
         Output(QUARTER_BUTTON_ID, "style"),
         Output(YEAR_BUTTON_ID, "style"),
+        Output(RANGE_6M_BUTTON_ID, "style"),
+        Output(RANGE_1Y_BUTTON_ID, "style"),
+        Output(RANGE_3Y_BUTTON_ID, "style"),
+        Output(RANGE_6Y_BUTTON_ID, "style"),
+        Output(RANGE_10Y_BUTTON_ID, "style"),
+        Output(RANGE_ALL_BUTTON_ID, "style"),
         Input(GENRE_DROPDOWN_ID, "value"),
         Input(PERIOD_STORE_ID, "data"),
+        Input(RANGE_STORE_ID, "data"),
     )
-    def update_metrics(selected_genre, selected_period):
+    def update_metrics(selected_genre, selected_period, selected_range):
         start_date, end_date = _period_window(selected_period, END_RANGE)
         filtered = _filter_games(games, selected_genre, start_date, end_date)
+        range_start_date = _range_start_date(selected_range)
+        market_value_figure = _build_market_value_figure(
+            _filter_games(games, selected_genre, range_start_date, END_RANGE),
+            selected_period,
+            range_start_date,
+            END_RANGE,
+        )
+        relative_market_value_figure = _build_relative_market_value_figure(
+            _filter_games(games, DEFAULT_GENRE, range_start_date, END_RANGE),
+            selected_period,
+            selected_genre,
+            range_start_date,
+            END_RANGE,
+        )
         previous_start, previous_end = _period_window(selected_period, start_date)
         previous_filtered = _filter_games(games, selected_genre, previous_start, previous_end)
 
@@ -358,6 +731,8 @@ def register_callbacks(app):
             purchased_copies_text,
             playtime_text,
             peak_ccu_text,
+            market_value_figure,
+            relative_market_value_figure,
             games_change_text,
             market_change_text,
             purchased_change_text,
@@ -376,4 +751,10 @@ def register_callbacks(app):
             BUTTON_ACTIVE_STYLE if selected_period == "month" else BUTTON_BASE_STYLE,
             BUTTON_ACTIVE_STYLE if selected_period == "quarter" else BUTTON_BASE_STYLE,
             BUTTON_ACTIVE_STYLE if selected_period == "year" else BUTTON_BASE_STYLE,
+            BUTTON_ACTIVE_STYLE if selected_range == "last-6-months" else BUTTON_BASE_STYLE,
+            BUTTON_ACTIVE_STYLE if selected_range == "last-year" else BUTTON_BASE_STYLE,
+            BUTTON_ACTIVE_STYLE if selected_range == "last-3-years" else BUTTON_BASE_STYLE,
+            BUTTON_ACTIVE_STYLE if selected_range == "last-6-years" else BUTTON_BASE_STYLE,
+            BUTTON_ACTIVE_STYLE if selected_range == "last-10-years" else BUTTON_BASE_STYLE,
+            BUTTON_ACTIVE_STYLE if selected_range == "all-data" else BUTTON_BASE_STYLE,
         )
