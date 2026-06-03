@@ -20,6 +20,7 @@ app = Dash(__name__, external_stylesheets=external_stylesheets, suppress_callbac
 app.title = "Game Market Analyzer"
 overview.register_callbacks(app)
 explore.register_callbacks(app)
+insights.register_callbacks(app)
 
 app.layout = html.Div([
     html.Div([
