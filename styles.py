@@ -169,3 +169,177 @@ GENRE_PALETTE = [
     "#84cc16",
     "#ec4899",
 ]
+
+FIELD_STYLE = {
+    "display": "flex",
+    "flexDirection": "column",
+    "gap": "0.45rem",
+}
+
+LABEL_STYLE = {
+    "fontSize": "0.9rem",
+    "fontWeight": "600",
+    "color": TEXT_PRIMARY,
+}
+
+HELP_TEXT_STYLE = {
+    "fontSize": "0.78rem",
+    "color": TEXT_SECONDARY,
+    "lineHeight": "1.35",
+}
+
+INPUT_STYLE = {
+    "width": "100%",
+    "padding": "0.7rem 0.8rem",
+    "borderRadius": "10px",
+    "border": "1px solid #dbe4f0",
+    "backgroundColor": "#ffffff",
+    "color": TEXT_PRIMARY,
+    "fontSize": "0.92rem",
+}
+
+SECTION_TITLE_STYLE = {
+    "fontSize": "1.05rem",
+    "fontWeight": "700",
+    "color": TEXT_PRIMARY,
+}
+
+HINT_PILL_STYLE = {
+    "display": "inline-flex",
+    "alignItems": "center",
+    "gap": "0.4rem",
+    "padding": "0.45rem 0.7rem",
+    "borderRadius": "999px",
+    "backgroundColor": "#eff6ff",
+    "color": "#1d4ed8",
+    "fontSize": "0.8rem",
+    "fontWeight": "600",
+}
+
+PANEL_STYLE = {
+    **CARD_STYLE,
+    "padding": "1.5rem",
+    "display": "flex",
+    "flexDirection": "column",
+    "gap": "1.1rem",
+    "width": "100%",
+    "boxSizing": "border-box",
+    "position": "sticky",
+    "top": "1.5rem",
+    "alignSelf": "flex-start",
+    "maxHeight": "calc(100vh - 9rem)",
+    "overflowY": "auto",
+}
+
+RIGHT_COLUMN_STYLE = {
+    "display": "flex",
+    "flexDirection": "column",
+    "gap": "1rem",
+    "minWidth": 0,
+    "flex": "1 1 0",
+    "minHeight": 0,
+    "width": "100%",
+    "boxSizing": "border-box",
+}
+
+HISTOGRAM_CARD_STYLE = {
+    **CHART_CARD_STYLE,
+    "display": "flex",
+    "flexDirection": "column",
+    "minHeight": 0,
+    "flex": "1 1 0",
+    "overflow": "hidden",
+    "boxSizing": "border-box",
+}
+
+TABLE_CARD_STYLE = {
+    **CHART_CARD_STYLE,
+    "display": "flex",
+    "flexDirection": "column",
+    "minHeight": 0,
+    "flex": "1 1 0",
+    "overflow": "hidden",
+    "boxSizing": "border-box",
+}
+
+TABLE_STYLE = {
+    "overflowX": "auto",
+    "overflowY": "auto",
+    "height": "100%",
+    "minHeight": 0,
+}
+
+TABLE_CELL_STYLE = {
+    "fontSize": "0.86rem",
+    "padding": "0.65rem 0.6rem",
+    "whiteSpace": "normal",
+    "height": "auto",
+    "border": "none",
+    "textAlign": "left",
+}
+
+TABLE_HEADER_STYLE = {
+    "backgroundColor": "#f8fbff",
+    "fontWeight": "700",
+    "color": TEXT_PRIMARY,
+    "borderBottom": "1px solid #dbe4f0",
+}
+
+
+EXPLORE_GRAPH_STYLE = {
+    "height": "100%",
+    "minHeight": 0,
+    "flex": "1 1 0",
+}
+
+EXPLORE_BODY_STYLE = {
+    "display": "grid",
+    "gridTemplateColumns": "minmax(320px, 360px) minmax(0, 1fr)",
+    "gap": "1.25rem",
+    "alignItems": "stretch",
+    "minHeight": 0,
+    "flex": "1 1 0",
+    "width": "100%",
+    "boxSizing": "border-box",
+}
+
+TABLE_BLOCK_STYLE = {
+    "display": "flex",
+    "flexDirection": "column",
+    "gap": "0.65rem",
+    "minHeight": 0,
+    "flex": "1 1 0",
+}
+
+TABLE_AVAILABLE_COLUMNS = [
+    "Name",
+    "Release date",
+    "Estimated owners",
+    "Peak CCU",
+    "Price",
+    "Genres",
+    "Categories",
+    "Tags",
+    "User score",
+    "Metacritic score",
+    "Positive ratings",
+]
+
+DEFAULT_TABLE_COLUMNS = [
+    "Name",
+    "Release date",
+    "Estimated owners",
+    "Peak CCU",
+    "Price",
+    "User score",
+    "Metacritic score",
+    "Positive ratings",
+]
+
+FILTER_INPUT_STYLE = {
+    **INPUT_STYLE,
+    "height": "44px",
+    "padding": "0 0.85rem",
+    "boxSizing": "border-box",
+    "lineHeight": "44px",
+}
