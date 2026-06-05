@@ -1,0 +1,90 @@
+/* Custom Driver.js styling to match Dashboard Modern Theme */
+
+/* Target the popover wrapper directly */
+.driver-popover {
+    background-color: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 12px !important;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.08), 0 4px 10px rgba(0, 0, 0, 0.04) !important;
+    color: #1e293b !important;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+    padding: 20px !important;
+    max-width: 320px !important;
+}
+
+.driver-popover-title {
+    font-size: 1.15rem !important;
+    font-weight: 600 !important;
+    color: #0f172a !important;
+    margin-bottom: 10px !important;
+    border-bottom: 1px solid #f1f5f9 !important;
+    padding-bottom: 8px !important;
+}
+
+.driver-popover-description {
+    font-size: 0.95rem !important;
+    color: #475569 !important;
+    line-height: 1.5 !important;
+    font-weight: 400 !important;
+}
+
+.driver-popover-footer {
+    margin-top: 18px !important;
+}
+
+.driver-popover-progress-text {
+    color: #64748b !important;
+    font-size: 0.85rem !important;
+    font-weight: 500 !important;
+}
+
+.driver-popover-navigation-btns {
+    display: flex !important;
+    gap: 10px !important;
+}
+
+.driver-popover-prev-btn, .driver-popover-next-btn {
+    border-radius: 6px !important;
+    font-weight: 500 !important;
+    font-size: 0.9rem !important;
+    padding: 8px 14px !important;
+    transition: all 0.2s ease !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+    border: none !important;
+    cursor: pointer !important;
+}
+
+.driver-popover-prev-btn {
+    background-color: #f1f5f9 !important;
+    color: #475569 !important;
+}
+
+.driver-popover-prev-btn:hover {
+    background-color: #e2e8f0 !important;
+    color: #0f172a !important;
+}
+
+.driver-popover-next-btn {
+    background-color: #3b82f6 !important;
+    color: white !important;
+}
+
+.driver-popover-next-btn:hover {
+    background-color: #2563eb !important;
+}
+
+.driver-popover-close-btn {
+    color: #94a3b8 !important;
+    transition: color 0.2s ease !important;
+    right: 12px !important;
+    top: 12px !important;
+}
+
+.driver-popover-close-btn:hover {
+    color: #0f172a !important;
+}
+
+.driver-popover-arrow {
+    display: none !important; /* Hide arrows for a cleaner floating appearance */
+}

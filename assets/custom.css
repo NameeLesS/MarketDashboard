@@ -93,3 +93,14 @@
   font-size: 0.88rem !important;
   color: #0f172a !important;
 }
+
+#sidebar-hide-btn:hover {
+  background-color: #eff6ff !important;
+  color: #1d4ed8 !important;
+}
+
+#sidebar-show-btn:hover {
+  background-color: #eff6ff !important;
+  color: #1d4ed8 !important;
+  border-color: #3b82f6 !important;
+}

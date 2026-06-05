@@ -221,7 +221,7 @@ def _build_violins(violins_data, selected_genre):
                     f"Min: {min_val:.1f} hrs<extra></extra>"
                 )
                 trace.hovertemplate = hover_text
-            trace.hoveron = 'violins'
+            trace.hoveron = 'kde'
             if hasattr(trace, 'marker') and getattr(trace.marker, 'color', None):
                 trace.hoverlabel = dict(
                     bgcolor=trace.marker.color,
@@ -299,7 +299,7 @@ def _build_violins(violins_data, selected_genre):
                     f"Min: ${min_val:,.0f}<extra></extra>"
                 )
                 trace.hovertemplate = hover_text
-            trace.hoveron = 'violins'
+            trace.hoveron = 'kde'
             if hasattr(trace, 'marker') and getattr(trace.marker, 'color', None):
                 trace.hoverlabel = dict(
                     bgcolor=trace.marker.color,

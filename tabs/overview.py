@@ -381,7 +381,7 @@ def _build_platform_pie_figure(selected_genre, year):
         _legend_labels_with_percentages(labels, values),
         values,
         "Supported Platforms",
-        ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b"],
+        ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6"],
     )
 
 
@@ -393,7 +393,7 @@ def _build_controller_support_pie_figure(selected_genre, year):
         _legend_labels_with_percentages(labels, values),
         values,
         "Controller Support",
-        ["#3b82f6", "#cbd5e1"],
+        ["#3b82f6", "#10b981"],
     )
 
 
@@ -405,7 +405,7 @@ def _build_vr_support_pie_figure(selected_genre, year):
         _legend_labels_with_percentages(labels, values),
         values,
         "VR Support",
-        ["#3b82f6", "#cbd5e1"],
+        ["#3b82f6", "#10b981"],
     )
 
 
@@ -835,7 +835,8 @@ layout = html.Div(
                     style={"fontSize": "1.25rem", "fontWeight": "700", "color": TEXT_PRIMARY},
                 ),
                 html.Div(
-                    [
+                    id="overview-period-buttons",
+                    children=[
                         html.Button("Month", id=MONTH_BUTTON_ID, n_clicks=0, style=BUTTON_ACTIVE_STYLE),
                         html.Button("Quarter", id=QUARTER_BUTTON_ID, n_clicks=0, style=BUTTON_BASE_STYLE),
                         html.Button("Year", id=YEAR_BUTTON_ID, n_clicks=0, style=BUTTON_BASE_STYLE),
@@ -853,7 +854,8 @@ layout = html.Div(
                     style=METRIC_GRID_STYLE,
                 ),
                 html.Div(
-                    [
+                    id="overview-range-buttons",
+                    children=[
                         html.Button("Last 6 Months", id=RANGE_6M_BUTTON_ID, n_clicks=0, style=BUTTON_BASE_STYLE),
                         html.Button("Last Year", id=RANGE_1Y_BUTTON_ID, n_clicks=0, style=BUTTON_ACTIVE_STYLE),
                         html.Button("Last 3 Years", id=RANGE_3Y_BUTTON_ID, n_clicks=0, style=BUTTON_BASE_STYLE),
@@ -981,7 +983,7 @@ layout = html.Div(
                                     children=_build_pie_legend(
                                         ["Win only", "Win+Lin+Mac", "Win+Linux", "Win+Mac"],
                                         [1, 1, 1, 1],
-                                        ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b"],
+                                        ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6"],
                                     ),
                                 ),
                             ],
@@ -1000,7 +1002,7 @@ layout = html.Div(
                                     children=_build_pie_legend(
                                         ["Yes", "No"],
                                         [1, 1],
-                                        ["#3b82f6", "#cbd5e1"],
+                                        ["#3b82f6", "#10b981"],
                                     ),
                                 ),
                             ],
@@ -1020,7 +1022,7 @@ layout = html.Div(
                                     children=_build_pie_legend(
                                         ["Yes", "No"],
                                         [1, 1],
-                                        ["#3b82f6", "#cbd5e1"],
+                                        ["#3b82f6", "#10b981"],
                                     ),
                                 ),
                             ],
@@ -1160,17 +1162,17 @@ def register_callbacks(app):
         platform_legend = _build_pie_legend(
             ["Win only", "Win+Lin+Mac", "Win+Linux", "Win+Mac"],
             platform_values,
-            ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b"],
+            ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6"],
         )
 
         controller_values = pies.get("controller", [0, 0])
         controller_legend = _build_pie_legend(
-            ["Yes", "No"], controller_values, ["#3b82f6", "#cbd5e1"]
+            ["Yes", "No"], controller_values, ["#3b82f6", "#10b981"]
         )
 
         vr_values = pies.get("vr", [0, 0])
         vr_legend = _build_pie_legend(
-            ["Yes", "No"], vr_values, ["#3b82f6", "#cbd5e1"]
+            ["Yes", "No"], vr_values, ["#3b82f6", "#10b981"]
         )
 
         metrics = PRECOMPUTED["metrics"].get(selected_genre, {}).get(selected_period, {})

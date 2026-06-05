@@ -768,6 +768,7 @@ layout = html.Div(
                                _build_range_inputs("explore-positive", 0, POSITIVE_MAX, step=0.1),
                                "Values are shown as percentages from 0 to 100."),
                     ],
+                    id="explore-filters-panel",
                     style=PANEL_STYLE,
                 ),
 
@@ -794,7 +795,8 @@ layout = html.Div(
                         html.Div(
                             [
                                 html.Div(
-                                    [
+                                    id="explore-table-tour-target",
+                                    children=[
                                         html.Div("Matching Games", style=SECTION_TITLE_STYLE),
                                         dcc.Dropdown(
                                             id="explore-table-columns",
@@ -846,7 +848,8 @@ layout = html.Div(
                     [
                         html.Div("Game Similarity", style=SECTION_TITLE_STYLE),
                         html.Div(
-                            [
+                            id="explore-distance-buttons",
+                            children=[
                                 html.Span("Distance Method: ", style={**LABEL_STYLE, "marginRight": "8px"}),
                                 html.Button("Euclidean", id="explore-scatter-dist-euclidean", n_clicks=0, style=BUTTON_ACTIVE_STYLE),
                                 html.Button("Cosine similarity", id="explore-scatter-dist-cosine", n_clicks=0, style=BUTTON_BASE_STYLE),
@@ -877,7 +880,7 @@ layout = html.Div(
                 html.Div(
                     dcc.Graph(
                         id="explore-scatter-plot",
-                        figure=_empty_figure("Game Similarity plot is empty for now.", height=400),
+                        figure=_empty_figure("Game Similarity plot is empty for now.", height=600),
                         config={"displayModeBar": True, "responsive": True, "scrollZoom": True},
                         style=PLOT_CHART_STYLE,
                     ),
@@ -907,6 +910,7 @@ layout = html.Div(
                     ),
                 ),
             ],
+            id="explore-sentiment-graphs",
             style=CHART_PLOTS_GRID_STYLE,
         ),
     ]
@@ -1115,7 +1119,7 @@ def register_callbacks(app):
         num_visible = len(visible_df)
 
         if plot_df.empty:
-            scatter_fig = _empty_figure("No games match the current filters.", height=400)
+            scatter_fig = _empty_figure("No games match the current filters.", height=600)
         else:
             color_col = COLOR_COLUMN_MAP.get(color_by, "Price")
             
@@ -1261,7 +1265,7 @@ def register_callbacks(app):
                 paper_bgcolor="#ffffff",
                 plot_bgcolor="#ffffff",
                 margin={"l": 40, "r": 20, "t": 20, "b": 40},
-                height=400,
+                height=600,
                 xaxis={"title": "MDS X" if dist_method == "euclidean" else "MDS Cosine X", "gridcolor": "#e2e8f0"},
                 yaxis={"title": "MDS Y" if dist_method == "euclidean" else "MDS Cosine Y", "gridcolor": "#e2e8f0"},
                 uirevision="scatter-plot-revision",
