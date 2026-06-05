@@ -14,24 +14,29 @@
 #     ])
 # ])
 
-from __future__ import annotations
+import json
 import math
+
+# Trigger dash auto-reloader
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from dash import Input, Output, dcc, html
+from plotly.subplots import make_subplots
 
 # Import layout constants directly from your centralized style sheet
 from styles import (
+    BG_SURFACE,
     CARD_STYLE,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
 )
 
 DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "games.csv"
+JSON_PATH = Path(__file__).resolve().parents[1] / "data" / "insights_precomputed.json"
 
 title = "Market Insights"
 desc = "Actionable takeaways from the data."
@@ -41,109 +46,134 @@ RED = '#EF553B'
 GREEN = '#00CC96'
 PURPLE = '#AB63FA'
 
-def _calculate_owners_midpoint(estimated_owners):
-    if pd.isna(estimated_owners):
-        return np.nan
-    owners_range = str(estimated_owners).split(' - ')
-    if len(owners_range) != 2:
-        return np.nan
-    try:
-        return (int(owners_range[0]) + int(owners_range[1])) // 2
-    except ValueError:
-        return np.nan
-
 def _load_insights_data() -> pd.DataFrame:
     usecols = [
         "AppID", "Name", "Price", "Genres", "Tags", "Positive", "Peak CCU",
-        "Estimated owners", "Average playtime forever", "Achievements", "DLC count"
+        "Estimated owners", "Average playtime forever", "Achievements", "DLC count",
+        "Owner midpoint", "Estimated_Income", "Positive_Pct"
     ]
     frame = pd.read_csv(DATA_PATH, usecols=usecols, low_memory=False)
-    
-    frame['Price'] = pd.to_numeric(frame['Price'], errors='coerce').fillna(0)
-    frame['Peak CCU'] = pd.to_numeric(frame['Peak CCU'], errors='coerce').fillna(0)
-    frame['Positive'] = pd.to_numeric(frame['Positive'], errors='coerce').fillna(0)
-    frame['Average playtime forever'] = pd.to_numeric(frame['Average playtime forever'], errors='coerce').fillna(0)
-    frame['Achievements'] = pd.to_numeric(frame['Achievements'], errors='coerce').fillna(0)
-    frame['DLC count'] = pd.to_numeric(frame['DLC count'], errors='coerce').fillna(0)
-    
-    frame['Positive_Pct'] = frame['Positive'] * 100
-    frame['Owners_Midpoint'] = frame['Estimated owners'].apply(_calculate_owners_midpoint)
-    frame['Estimated_Income'] = frame['Owners_Midpoint'] * frame['Price']
-    
+    frame['Tag_List'] = frame['Tags'].fillna('').astype(str).str.split(',')
     return frame
 
 GAMES = _load_insights_data()
 
-GENRE_OPTIONS = sorted(list(set([
-    g.strip() for sublist in GAMES['Genres'].dropna().str.split(',') for g in sublist if g.strip()
-])))
+try:
+    with open(JSON_PATH, 'r') as f:
+        PRECOMPUTED = json.load(f)
+except FileNotFoundError:
+    PRECOMPUTED = {}
+
+if PRECOMPUTED:
+    GENRE_OPTIONS = sorted(list(PRECOMPUTED.keys()))
+else:
+    GENRE_OPTIONS = sorted(list(set([
+        g.strip() for sublist in GAMES['Genres'].dropna().astype(str).str.split(',') for g in sublist if g.strip()
+    ])))
 
 
-def _build_treemap(df_target, selected_genre):
-    df_target_tags = df_target.dropna(subset=['Tags']).copy()
-    df_target_tags['Tag_List'] = df_target_tags['Tags'].apply(lambda x: [t.strip() for t in str(x).split(',') if t.strip()])
-    df_exploded = df_target_tags.explode('Tag_List')
-    
-    tag_summary = df_exploded.groupby('Tag_List').agg(
-        Game_Count=('Name', 'count'), 
-        Estimated_Income_Median=('Estimated_Income', 'median')
-    ).reset_index()
-    
-    tag_summary = tag_summary[tag_summary['Tag_List'].str.lower() != selected_genre.lower()]
-    top_30_tags = tag_summary.sort_values(by='Game_Count', ascending=False).head(30)
-    
-    if top_30_tags.empty:
+def _build_treemap(genre_data, selected_genre):
+    treemap = genre_data.get('treemap', {})
+    if not treemap or not treemap.get('Tag_List'):
         return go.Figure()
 
+    df = pd.DataFrame(treemap)
+    
+    # 1. THE MATH: Create a tiny offset below your real data
+    min_income = df['Estimated_Income_Median'].min()
+    max_income = df['Estimated_Income_Median'].max()
+    
+    # Create a 1% gap below your lowest actual income
+    offset = (max_income - min_income) * 0.01 if max_income > min_income else 100
+    root_value = min_income - offset
+    
     fig = px.treemap(
-        top_30_tags,
+        df,
         path=['Tag_List'],
         values='Game_Count',
         color='Estimated_Income_Median',
-        color_continuous_scale='Blues',
-        title=f'Sub-Tag Strategic Matrix for {selected_genre} Games',
+        
+        # 2. THE SCALE: 0.0 is White. 0.01 starts your Gray and sweeps up to Blue.
+        color_continuous_scale=[
+            [0.0, 'white'], 
+            [0.01, '#E5E7EB'], 
+            [1.0, BLUE] # Assuming BLUE is defined globally in your script
+        ],
+        # Lock the colorbar engine to our new extended range
+        range_color=[root_value, max_income],
         labels={'Estimated_Income_Median': 'Median of<br>Estimated Income'},
-        template='plotly_white'
     )
+    
+    # 3. THE HIJACK: Push the hidden root node down into the white pocket
+    ids = list(fig.data[0].ids)
+    if '(?)' in ids:
+        root_idx = ids.index('(?)')
+        colors = list(fig.data[0].marker.colors)
+        colors[root_idx] = root_value
+        fig.data[0].marker.colors = colors
+
     fig.update_traces(
-        hovertemplate="<b>Tag: %{label}</b><br>Total Games: %{value:,}<br>Median Income: $%{color:,.0f}<extra></extra>"
+        hovertemplate="<b>Tag: %{label}</b><br>Total Games: %{value:,}<br>Median Income: $%{color:,.0f}<extra></extra>",
+        pathbar=dict(visible=False),
+        tiling=dict(pad=0), 
+        marker=dict(line=dict(color="white", width=3)),
+        textfont=dict(family="Inter, sans-serif", size=14),
+        hoverlabel=dict(bgcolor="rgba(17, 24, 39, 0.95)", font_size=13, font_family="Inter, sans-serif", font_color="white")
     )
-    fig.update_layout(title_x=0.5, margin=dict(t=50, b=10, l=10, r=10))
+    
+    fig.update_layout(
+        title=dict(text=f"<b>Market Opportunity Analysis: Tag Frequency & Median Earnings ({selected_genre})</b>", x=0.02, xanchor="left"),
+        margin=dict(l=0, r=0, t=52, b=70),
+        font=dict(family="Inter, sans-serif", color=TEXT_PRIMARY),
+        paper_bgcolor=BG_SURFACE, 
+        plot_bgcolor=BG_SURFACE, 
+        
+        coloraxis_colorbar=dict(
+            title="",
+            orientation="h",
+            yanchor="top",
+            y=-0.02,
+            xanchor="center",
+            x=0.5,
+            thickness=10,
+            len=0.6,
+            outlinewidth=0,
+            tickformat="$,.0s",
+        ),
+    )
     return fig
 
-def _build_heatmap(df_target, selected_genre):
-    df_target_tags = df_target.dropna(subset=['Tags']).copy()
-    df_target_tags['Tag_List'] = df_target_tags['Tags'].apply(lambda x: [t.strip() for t in str(x).split(',') if t.strip()])
-    df_exploded = df_target_tags.explode('Tag_List')
+def _build_heatmap(genre_data, selected_genre):
+    heatmap = genre_data.get('heatmap', {})
+    tags = heatmap.get('tags', [])
+    matrix = heatmap.get('matrix', [])
     
-    top_15_subtags = df_exploded[df_exploded['Tag_List'].str.lower() != selected_genre.lower()]['Tag_List'].value_counts().head(15).index.tolist()
-    
-    if not top_15_subtags:
-        return go.Figure()
-        
-    df_matrix_filtered = df_exploded[df_exploded['Tag_List'].isin(top_15_subtags)]
-    tag_pairs = df_matrix_filtered.merge(df_matrix_filtered, on='AppID', suffixes=('_A', '_B'))
-    tag_pairs = tag_pairs[tag_pairs['Tag_List_A'] != tag_pairs['Tag_List_B']]
-    
-    if tag_pairs.empty:
+    if not tags or not matrix:
         return go.Figure()
 
-    fig = px.density_heatmap(
-        tag_pairs, 
-        x='Tag_List_A', 
-        y='Tag_List_B', 
-        z='Positive_Pct_A', 
-        histfunc='avg',
-        title=f'Sub-Tag Synergy Heatmap Matrix for {selected_genre} Games',
+    fig = px.imshow(
+        matrix,
+        x=tags,
+        y=tags,
         color_continuous_scale='Viridis',
-        category_orders={"Tag_List_A": top_15_subtags, "Tag_List_B": top_15_subtags},
-        template='plotly_white'
+        labels=dict(x="Primary Tag", y="Secondary Tag", color="Average Positive<br>Reviews (%)")
     )
+    
     fig.update_traces(
         hovertemplate="Primary Tag: %{x}<br>Secondary Tag: %{y}<br>Average Positive Reviews: %{z:.1f}%<extra></extra>"
     )
-    fig.update_coloraxes(colorbar_title="Average Positive<br>Reviews (%)")
-    fig.update_layout(xaxis_tickangle=-45, xaxis_title="", yaxis_title="", title_x=0.5, margin=dict(t=50, b=0, l=0, r=0))
+    
+    fig.update_layout(
+        title=dict(text=f"<b>Genre Co-occurrence & Player Satisfaction Matrix ({selected_genre})</b>", x=0.02, xanchor="left"),
+        xaxis_tickangle=-45, 
+        xaxis_title="", 
+        yaxis_title="", 
+        margin=dict(l=50, r=20, t=52, b=50),
+        font=dict(family="Inter, sans-serif", color=TEXT_PRIMARY),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+    )
+    
     return fig
 
 def _build_violins(df_target, selected_genre):
@@ -172,12 +202,49 @@ def _build_violins(df_target, selected_genre):
     fig_playtime = px.violin(
         df_violin, x='Price_Tier', y='Playtime_Hours', points=False, box=True, color='Price_Tier', color_discrete_sequence=[PURPLE,BLUE,RED,GREEN],
         category_orders={'Price_Tier': global_order},
-        title=f'Player Engagement across Pricing Levels for {selected_genre} Games',
-        labels={'Playtime_Hours': 'Playtime (Hours)', 'Price_Tier': 'Market Tier'},
-        template='plotly_white'
+        labels={'Playtime_Hours': 'Playtime (Hours)', 'Price_Tier': 'Market Tier'}
     )
-    fig_playtime.update_traces(hovertemplate="<b>%{x}</b><br>Playtime: %{y:.1f} hours<extra></extra>")
-    fig_playtime.update_layout(title_x=0.5, showlegend=False, margin=dict(t=50, b=10, l=10, r=10))
+    for trace in fig_playtime.data:
+        tier_name = trace.name
+        sub_df = df_violin[df_violin['Price_Tier'] == tier_name]
+        if not sub_df.empty:
+            min_val = sub_df['Playtime_Hours'].min()
+            q1_val = sub_df['Playtime_Hours'].quantile(0.25)
+            median_val = sub_df['Playtime_Hours'].median()
+            mean_val = sub_df['Playtime_Hours'].mean()
+            q3_val = sub_df['Playtime_Hours'].quantile(0.75)
+            max_val = sub_df['Playtime_Hours'].max()
+            
+            tier_display = tier_name.replace("<br>", " ")
+            hover_text = (
+                f"<b>{tier_display}</b><br>"
+                f"Max: {max_val:.1f} hrs<br>"
+                f"Q3: {q3_val:.1f} hrs<br>"
+                f"Median: {median_val:.1f} hrs<br>"
+                f"Mean: {mean_val:.1f} hrs<br>"
+                f"Q1: {q1_val:.1f} hrs<br>"
+                f"Min: {min_val:.1f} hrs<extra></extra>"
+            )
+            trace.hovertemplate = hover_text
+        trace.hoveron = 'violins'
+        if hasattr(trace, 'marker') and getattr(trace.marker, 'color', None):
+            trace.hoverlabel = dict(
+                bgcolor=trace.marker.color,
+                bordercolor=trace.marker.color,
+                font=dict(family="Inter, sans-serif", size=13, color="white")
+            )
+
+    fig_playtime.update_layout(
+        title=dict(text=f"<b>Player Engagement & Playtime Distribution by Pricing Tier ({selected_genre})</b>", x=0.02, xanchor="left"),
+        showlegend=False, 
+        margin=dict(l=50, r=20, t=52, b=50),
+        font=dict(family="Inter, sans-serif", color=TEXT_PRIMARY),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        hovermode="closest",
+    )
+    fig_playtime.update_xaxes(showspikes=False)
+    fig_playtime.update_yaxes(showspikes=False)
 
     # --- Violin Chart B: Estimated Income ---
     df_income = df_target[df_target['Estimated_Income'] > 0].copy()
@@ -190,16 +257,52 @@ def _build_violins(df_target, selected_genre):
     
     fig_income = px.violin(
         df_income, x='Price_Tier', y='Estimated_Income', points=False, log_y=True, color='Price_Tier',
+        color_discrete_sequence=[BLUE, RED, GREEN],
         category_orders={'Price_Tier': income_order}, box=True,
-        title=f'Estimated Income Potential across Pricing Levels for {selected_genre} Games',
-        labels={'Estimated_Income': 'Estimated Income (USD)', 'Price_Tier': 'Market Tier'},
-        template='plotly_white'
+        labels={'Estimated_Income': 'Estimated Income (USD)', 'Price_Tier': 'Market Tier'}
     )
-    fig_income.update_traces(hovertemplate="<b>%{x}</b><br>Estimated Income: %{y:.1f}<extra></extra>")
+    for trace in fig_income.data:
+        tier_name = trace.name
+        sub_df = df_income[df_income['Price_Tier'] == tier_name]
+        if not sub_df.empty:
+            min_val = sub_df['Estimated_Income'].min()
+            q1_val = sub_df['Estimated_Income'].quantile(0.25)
+            median_val = sub_df['Estimated_Income'].median()
+            mean_val = sub_df['Estimated_Income'].mean()
+            q3_val = sub_df['Estimated_Income'].quantile(0.75)
+            max_val = sub_df['Estimated_Income'].max()
+            
+            tier_display = tier_name.replace("<br>", " ")
+            hover_text = (
+                f"<b>{tier_display}</b><br>"
+                f"Max: ${max_val:,.0f}<br>"
+                f"Q3: ${q3_val:,.0f}<br>"
+                f"Median: ${median_val:,.0f}<br>"
+                f"Mean: ${mean_val:,.0f}<br>"
+                f"Q1: ${q1_val:,.0f}<br>"
+                f"Min: ${min_val:,.0f}<extra></extra>"
+            )
+            trace.hovertemplate = hover_text
+        trace.hoveron = 'violins'
+        if hasattr(trace, 'marker') and getattr(trace.marker, 'color', None):
+            trace.hoverlabel = dict(
+                bgcolor=trace.marker.color,
+                bordercolor=trace.marker.color,
+                font=dict(family="Inter, sans-serif", size=13, color="white")
+            )
+
     fig_income.update_layout(
-        title_x=0.5, showlegend=False, margin=dict(t=50, b=10, l=10, r=10),
-        yaxis=dict(tickformat="$,", tickvals=[5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000, 2000000])
+        title=dict(text=f"<b>Revenue Performance and Distribution Analysis by Pricing Tier ({selected_genre})</b>", x=0.02, xanchor="left"),
+        showlegend=False, 
+        margin=dict(l=50, r=20, t=52, b=50),
+        yaxis=dict(tickformat="$,", tickvals=[5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000, 2000000]),
+        font=dict(family="Inter, sans-serif", color=TEXT_PRIMARY),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        hovermode="closest",
     )
+    fig_income.update_xaxes(showspikes=False)
+    fig_income.update_yaxes(showspikes=False)
 
     return fig_playtime, fig_income
 
@@ -255,10 +358,13 @@ def _build_radar(df_target, selected_genre):
     fig.update_layout(
         polar1=dict(radialaxis=dict(visible=True, range=[0, 100], ticksuffix="%", angle=45)),
         polar2=dict(radialaxis=dict(visible=True, range=[0, 100], ticksuffix="%", angle=45)),
-        title=f'Percentile-Ranked Competitive Benchmarks for {selected_genre} Games',
-        showlegend=True, title_x=0.5, template='plotly_white',
+        title=dict(text=f"<b>Competitive Performance Benchmarking: Baseline vs. Market Leaders ({selected_genre})</b>", x=0.02, xanchor="left"),
+        showlegend=True, 
         legend=dict(yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
-        margin=dict(t=80, b=80, l=20, r=20)
+        margin=dict(l=50, r=20, t=52, b=50),
+        font=dict(family="Inter, sans-serif", color=TEXT_PRIMARY),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
     )
     return fig
 
@@ -271,45 +377,56 @@ layout = html.Div([
     ], style={"marginBottom": "1.5rem"}),
     
     # Global Control Filter Card Panel
-    html.Div(style={**CARD_STYLE, "marginBottom": "1.5rem"}, children=[
-        html.Div([
-            html.Label("Target Analytical Genre Vertical:", style={"fontWeight": "600", "fontSize": "0.85rem", "color": TEXT_PRIMARY, "marginBottom": "6px", "display": "block"}),
+    html.Div(
+        children=[
+            html.Label(
+                "Genre",
+                style={
+                    "color": TEXT_SECONDARY,
+                    "fontSize": "0.75rem",
+                    "fontWeight": "600",
+                    "textTransform": "uppercase",
+                    "letterSpacing": "0.06em",
+                    "marginBottom": "6px",
+                    "display": "block",
+                },
+            ),
             dcc.Dropdown(
                 id="insights-global-genre-dropdown",
                 options=[{"label": g, "value": g} for g in GENRE_OPTIONS],
                 value="Indie",
                 clearable=False,
-                style={"width": "100%", "minWidth": "280px"}
+                style={"maxWidth": "340px"}
             )
-        ], style={"maxWidth": "400px"})
-    ]),
+        ], style={"marginBottom": "1.25rem"}
+    ),
 
     # UPPER SECTION: Flex Row Split (Left Column Stack vs Right Column Tall Card)
     html.Div([
         
         # Left Sub-Column: Treemap on top of Heatmap
         html.Div([
-            html.Div(style={**CARD_STYLE, "marginBottom": "1.5rem"}, children=[
-                dcc.Graph(id="insights-treemap-graph", config={"responsive": True}, style={"height": "400px"})
+            html.Div(style={**CARD_STYLE, "border": "none", "marginBottom": "1.5rem"}, children=[
+                dcc.Graph(id="insights-treemap-graph", config={"responsive": True}, style={"height": "650px"})
             ]),
-            html.Div(style=CARD_STYLE, children=[
+            html.Div(style={**CARD_STYLE, "border": "none"}, children=[
                 dcc.Graph(id="insights-heatmap-graph", config={"responsive": True}, style={"height": "500px"})
             ])
         ], style={"flex": "1.1", "display": "flex", "flexDirection": "column"}),
         
         # Right Column: Holds the full double-stacked Radar Subplots together
-        html.Div(style={**CARD_STYLE, "flex": "0.9", "display": "flex", "flexDirection": "column"}, children=[
+        html.Div(style={**CARD_STYLE, "border": "none", "flex": "0.9", "display": "flex", "flexDirection": "column"}, children=[
             dcc.Graph(id="insights-radar-subplots-graph", config={"responsive": True}, style={"flex": "1", "height": "980px"})
         ])
         
     ], style={"display": "flex", "gap": "1.5rem", "marginBottom": "1.5rem"}),
 
     # LOWER SECTION: Wide Full-Width Stacked Violin Charts
-    html.Div(style={**CARD_STYLE, "marginBottom": "1.5rem"}, children=[
+    html.Div(style={**CARD_STYLE, "border": "none", "marginBottom": "1.5rem"}, children=[
         dcc.Graph(id="insights-income-violin-graph", config={"responsive": True})
     ]),
     
-    html.Div(style=CARD_STYLE, children=[
+    html.Div(style={**CARD_STYLE, "border": "none"}, children=[
         dcc.Graph(id="insights-playtime-violin-graph", config={"responsive": True})
     ])
 ])
@@ -326,10 +443,13 @@ def register_callbacks(app):
     )
     def update_insights_dashboard(selected_genre):
         
-        df_target = GAMES[GAMES['Genres'].fillna('').str.contains(selected_genre, case=False)].copy()
+        genre_data = PRECOMPUTED.get(selected_genre, {})
         
-        fig_treemap = _build_treemap(df_target, selected_genre)
-        fig_heatmap = _build_heatmap(df_target, selected_genre)
+        # We use regex=False for a massive speedup on string searching
+        df_target = GAMES[GAMES['Genres'].fillna('').astype(str).str.contains(selected_genre, case=False, regex=False)].copy()
+        
+        fig_treemap = _build_treemap(genre_data, selected_genre)
+        fig_heatmap = _build_heatmap(genre_data, selected_genre)
         fig_playtime, fig_income = _build_violins(df_target, selected_genre)
         fig_radar = _build_radar(df_target, selected_genre)
         

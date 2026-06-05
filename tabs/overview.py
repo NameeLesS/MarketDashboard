@@ -27,21 +27,10 @@ from styles import (
 )
 
 
-def _parse_owner_midpoint(value):
-    if pd.isna(value):
-        return pd.NA
-
-    end_points = [float(val.strip()) for val in value.split(" - ")]
-    return sum(end_points) / 2
-
-
 def _load_games() -> pd.DataFrame:
     DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "games.csv"
     games = pd.read_csv(DATA_PATH, index_col=0)
     games["Release date"] = pd.to_datetime(games["Release date"], errors="coerce")
-    for column in ["Price", "Peak CCU", "Average playtime forever"]:
-        games[column] = pd.to_numeric(games[column], errors="coerce")
-    games["Owner midpoint"] = games["Estimated owners"].apply(_parse_owner_midpoint)
     return games
 
 
@@ -270,7 +259,52 @@ def _has_any_category(value, terms):
     return any(term.strip().lower() in normalized for term in terms)
 
 
+def _get_xaxis_ticks(x_values, period, selected_range):
+    if not x_values:
+        return [], []
+        
+    # If period is year, we always show years for all ticks
+    if period == "year":
+        return x_values, [t.strftime("%Y") for t in x_values]
+        
+    # If period is quarter:
+    if period == "quarter":
+        if selected_range in ["last-6-months", "last-year"]:
+            tick_text = []
+            for t in x_values:
+                q = ((t.month - 1) // 3) + 1
+                tick_text.append(f"Q{q} {t.strftime('%y')}")
+            return x_values, tick_text
+        else:
+            # Show years only: tick at Q1 (January)
+            tickvals = [t for t in x_values if t.month == 1]
+            if not tickvals:
+                tickvals = [x_values[0]]
+            return tickvals, [t.strftime("%Y") for t in tickvals]
+            
+    # If period is month:
+    if period == "month":
+        if selected_range in ["last-6-months", "last-year"]:
+            # Show Jan, Feb, etc. for every month
+            return x_values, [t.strftime("%b") for t in x_values]
+        else:
+            # Show years only: tick at January
+            tickvals = [t for t in x_values if t.month == 1]
+            if not tickvals:
+                # Fallback to first month of each year
+                years_seen = set()
+                tickvals = []
+                for t in x_values:
+                    if t.year not in years_seen:
+                        tickvals.append(t)
+                        years_seen.add(t.year)
+            return tickvals, [t.strftime("%Y") for t in tickvals]
+            
+    return x_values, [t.strftime("%Y-%m-%d") for t in x_values]
+
+
 def _build_pie_figure(labels, values, title, colors):
+    """Build a filled pie chart figure with no native legend (legend rendered as custom HTML)."""
     return {
         "data": [
             {
@@ -281,24 +315,16 @@ def _build_pie_figure(labels, values, title, colors):
                 "textinfo": "none",
                 "sort": False,
                 "direction": "clockwise",
-                "hole": 0.34,
+                "hole": 0,
                 "hovertemplate": "%{label}<br>%{value:,}<br>%{percent}<extra></extra>",
             }
         ],
         "layout": {
-            "title": {"text": title, "x": 0.02, "xanchor": "left", "font": {"size": 16}},
-            "margin": {"l": 12, "r": 140, "t": 40, "b": 12},
+            "title": {"text": f"<b>{title}</b>", "x": 0.02, "xanchor": "left", "font": {"size": 15}},
+            "margin": {"l": 8, "r": 8, "t": 36, "b": 8},
             "paper_bgcolor": "rgba(0,0,0,0)",
             "plot_bgcolor": "rgba(0,0,0,0)",
-            "showlegend": True,
-            "legend": {
-                "x": 1.01,
-                "y": 1,
-                "xanchor": "left",
-                "yanchor": "top",
-                "orientation": "v",
-                "font": {"size": 11},
-            },
+            "showlegend": False,
             "font": {"family": "Inter, sans-serif", "color": TEXT_PRIMARY},
         },
     }
@@ -310,6 +336,55 @@ def _legend_labels_with_percentages(labels, values):
         return [f"{label} (0.0%)" for label in labels]
 
     return [f"{label} ({(value / total) * 100:.1f}%)" for label, value in zip(labels, values)]
+
+
+def _build_pie_legend(labels, values, colors):
+    """Render a compact horizontal legend with filled circle swatches below a pie chart."""
+    total = sum(values)
+    items = []
+    for label, value, color in zip(labels, values, colors):
+        pct = f"{(value / total * 100):.1f}%" if total > 0 else "0.0%"
+        items.append(
+            html.Div(
+                [
+                    html.Span(
+                        style={
+                            "display": "inline-block",
+                            "width": "10px",
+                            "height": "10px",
+                            "borderRadius": "50%",
+                            "backgroundColor": color,
+                            "flexShrink": "0",
+                            "marginTop": "2px",
+                        }
+                    ),
+                    html.Span(
+                        f"{label} {pct}",
+                        style={
+                            "fontSize": "0.73rem",
+                            "color": TEXT_SECONDARY,
+                            "lineHeight": "1.3",
+                            "fontFamily": "Inter, sans-serif",
+                        },
+                    ),
+                ],
+                style={
+                    "display": "flex",
+                    "alignItems": "flex-start",
+                    "gap": "5px",
+                },
+            )
+        )
+    return html.Div(
+        items,
+        style={
+            "display": "flex",
+            "flexWrap": "wrap",
+            "gap": "6px 12px",
+            "justifyContent": "center",
+            "padding": "6px 8px 8px",
+        },
+    )
 
 
 def _build_game_type_pie_figure(df):
@@ -333,16 +408,17 @@ def _build_game_type_pie_figure(df):
     }
 
     values = [
-        int(category_series.apply(lambda value: _has_any_category(value, singleplayer_terms)).sum()),
-        int(category_series.apply(lambda value: _has_any_category(value, multiplayer_terms)).sum()),
-        int(category_series.apply(lambda value: _has_any_category(value, coop_terms)).sum()),
+        int(category_series.apply(lambda value: _has_any_category(value, singleplayer_terms)).astype(bool).sum()),
+        int(category_series.apply(lambda value: _has_any_category(value, multiplayer_terms)).astype(bool).sum()),
+        int(category_series.apply(lambda value: _has_any_category(value, coop_terms)).astype(bool).sum()),
     ]
     labels = ["Singleplayer", "Multiplayer", "Co-op"]
+    # Consistent palette: Blue, Green, Yellow
     return _build_pie_figure(
         _legend_labels_with_percentages(labels, values),
         values,
         "Game Type",
-        ["#2563eb", "#f59e0b", "#10b981"],
+        ["#3b82f6", "#10b981", "#f59e0b"],
     )
 
 
@@ -358,11 +434,12 @@ def _build_platform_pie_figure(df):
         int((windows & ~linux & mac).sum()),
     ]
     labels = ["Windows only", "Windows + Linux + Mac", "Windows + Linux", "Windows + Mac"]
+    # Consistent palette: Blue, Purple, Green, Yellow
     return _build_pie_figure(
         _legend_labels_with_percentages(labels, values),
         values,
         "Supported Platforms",
-        ["#3b82f6", "#8b5cf6", "#22c55e", "#f97316"],
+        ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b"],
     )
 
 
@@ -372,27 +449,29 @@ def _build_controller_support_pie_figure(df):
         "Partial controller support",
         "Tracked Controller Support",
     }
-    supported = df["Categories"].fillna("").astype(str).apply(lambda value: _has_any_category(value, supported_terms))
+    supported = df["Categories"].fillna("").astype(str).apply(lambda value: _has_any_category(value, supported_terms)).astype(bool)
     values = [int(supported.sum()), int((~supported).sum())]
     labels = ["Yes", "No"]
+    # Consistent palette: Yes=Blue, No=Gray
     return _build_pie_figure(
         _legend_labels_with_percentages(labels, values),
         values,
         "Controller Support",
-        ["#14b8a6", "#ef4444"],
+        ["#3b82f6", "#cbd5e1"],
     )
 
 
 def _build_vr_support_pie_figure(df):
     supported_terms = {"VR Only", "VR Supported", "VR Support", "SteamVR Collectibles"}
-    supported = df["Categories"].fillna("").astype(str).apply(lambda value: _has_any_category(value, supported_terms))
+    supported = df["Categories"].fillna("").astype(str).apply(lambda value: _has_any_category(value, supported_terms)).astype(bool)
     values = [int(supported.sum()), int((~supported).sum())]
     labels = ["Yes", "No"]
+    # Consistent palette: Yes=Blue, No=Gray
     return _build_pie_figure(
         _legend_labels_with_percentages(labels, values),
         values,
         "VR Support",
-        ["#a855f7", "#64748b"],
+        ["#3b82f6", "#cbd5e1"],
     )
 
 
@@ -434,11 +513,12 @@ def _genre_purchased_copies_buckets(df, period, start_date, end_date):
     return grouped[grouped["Purchased copies"] > 0]
 
 
-def _build_market_value_figure(df, period, start_date, end_date):
+def _build_market_value_figure(df, period, selected_range, start_date, end_date):
     grouped = _bucket_market_value(df, period, start_date, end_date)
     return timeseries_line_figure(
         grouped,
         period=period,
+        selected_range=selected_range,
         y_col="Market value",
         title="Estimated Market Value",
         yaxis_title="Market value",
@@ -447,11 +527,12 @@ def _build_market_value_figure(df, period, start_date, end_date):
     )
 
 
-def _build_purchased_copies_figure(df, period, start_date, end_date):
+def _build_purchased_copies_figure(df, period, selected_range, start_date, end_date):
     grouped = _bucket_purchased_copies(df, period, start_date, end_date)
     return timeseries_line_figure(
         grouped,
         period=period,
+        selected_range=selected_range,
         y_col="Purchased copies",
         title="Estimated Purchased Copies",
         yaxis_title="Purchased copies",
@@ -460,7 +541,7 @@ def _build_purchased_copies_figure(df, period, start_date, end_date):
     )
 
 
-def timeseries_line_figure(grouped, period, y_col, title, yaxis_title, hover_template, currency=False):
+def timeseries_line_figure(grouped, period, selected_range, y_col, title, yaxis_title, hover_template, currency=False):
     """Build a line figure from a grouped dataframe with a datetime 'Release date' index and a numeric y_col."""
     if not grouped.empty:
         index = pd.period_range(
@@ -477,6 +558,8 @@ def timeseries_line_figure(grouped, period, y_col, title, yaxis_title, hover_tem
     if currency:
         yaxis.update({"tickprefix": "$", "separatethousands": True})
 
+    tickvals, ticktext = _get_xaxis_ticks(x_values, period, selected_range)
+
     return {
         "data": [
             {
@@ -491,7 +574,7 @@ def timeseries_line_figure(grouped, period, y_col, title, yaxis_title, hover_tem
             }
         ],
         "layout": {
-            "title": {"text": title, "x": 0.02, "xanchor": "left"},
+            "title": {"text": f"<b>{title}</b>", "x": 0.02, "xanchor": "left"},
             "margin": {"l": 50, "r": 20, "t": 52, "b": 50},
             "paper_bgcolor": "rgba(0,0,0,0)",
             "plot_bgcolor": "rgba(0,0,0,0)",
@@ -500,7 +583,8 @@ def timeseries_line_figure(grouped, period, y_col, title, yaxis_title, hover_tem
                 "title": _period_axis_label(period),
                 "type": "date",
                 "showgrid": False,
-                "tickformatstops": _period_tickformatstops(period),
+                "tickvals": tickvals,
+                "ticktext": ticktext,
             },
             "yaxis": yaxis,
             "font": {"family": "Inter, sans-serif", "color": TEXT_PRIMARY},
@@ -508,11 +592,12 @@ def timeseries_line_figure(grouped, period, y_col, title, yaxis_title, hover_tem
     }
 
 
-def _build_relative_market_value_figure(df, period, selected_genre, start_date, end_date):
+def _build_relative_market_value_figure(df, period, selected_genre, selected_range, start_date, end_date):
     grouped = _genre_market_value_buckets(df, period, start_date, end_date)
     return relative_barchart_figure(
         grouped,
         period=period,
+        selected_range=selected_range,
         value_col="Market value",
         title="Relative Market Value",
         yaxis_title="Market value",
@@ -522,11 +607,12 @@ def _build_relative_market_value_figure(df, period, selected_genre, start_date, 
     )
 
 
-def _build_relative_purchased_copies_figure(df, period, selected_genre, start_date, end_date):
+def _build_relative_purchased_copies_figure(df, period, selected_genre, selected_range, start_date, end_date):
     grouped = _genre_purchased_copies_buckets(df, period, start_date, end_date)
     return relative_barchart_figure(
         grouped,
         period=period,
+        selected_range=selected_range,
         value_col="Purchased copies",
         title="Relative Purchased Copies",
         yaxis_title="Purchased copies",
@@ -536,19 +622,19 @@ def _build_relative_purchased_copies_figure(df, period, selected_genre, start_da
     )
 
 
-def relative_barchart_figure(grouped, period, value_col, title, yaxis_title, hover_label, currency=False, selected_genre=None):
-    """Build a stacked relative bar chart with optional highlighted genre and midpoint trend."""
-    selected_is_all = not selected_genre or selected_genre == DEFAULT_GENRE
-    if selected_is_all:
-        genre_totals = grouped.groupby("Genre")[value_col].sum().sort_values(ascending=False)
-        ordered_genres = genre_totals.index.tolist()
-        highlighted_genre = None
-    else:
-        highlighted_genre = selected_genre
-        genre_totals = grouped.groupby("Genre")[value_col].sum().sort_values(ascending=False)
-        ordered_genres = [selected_genre] + [genre for genre in genre_totals.index.tolist() if genre != selected_genre]
+def relative_barchart_figure(grouped, period, selected_range, value_col, title, yaxis_title, hover_label, currency=False, selected_genre=None):
+    """Build a per-column-sorted stacked bar chart using explicit base arrays.
 
-    traces = []
+    For every time-period column, genres are sorted independently by their value in that column
+    (largest at the bottom, smallest at the top). This uses barmode='overlay' with a per-bar
+    `base` array rather than Plotly's built-in stack ordering, which only supports a global trace order.
+    Colours are stable (same genre always gets the same hue) regardless of the current selection.
+    When a genre is highlighted it is pinned at the very bottom of every bar.
+    """
+    selected_is_all = not selected_genre or selected_genre == DEFAULT_GENRE
+    highlighted_genre = None if selected_is_all else selected_genre
+
+    # ── x-axis index ──────────────────────────────────────────────────────────
     if not grouped.empty:
         x_index = pd.period_range(
             start=grouped["Release date"].min().to_period(_period_frequency(period)),
@@ -558,72 +644,144 @@ def relative_barchart_figure(grouped, period, value_col, title, yaxis_title, hov
     else:
         x_index = pd.DatetimeIndex([])
     x_values = x_index.to_pydatetime().tolist()
+    n_x = len(x_values)
 
-    for index, genre in enumerate(ordered_genres):
-        genre_frame = grouped[grouped["Genre"] == genre]
-        if genre_frame.empty and genre != highlighted_genre:
-            continue
-        if len(x_index) > 0:
-            genre_frame = genre_frame.set_index("Release date").reindex(x_index, fill_value=pd.NA).reset_index()
-            genre_frame.rename(columns={"index": "Release date"}, inplace=True)
+    # ── Pivot: genre → value list aligned to x_index ──────────────────────────
+    all_genres_in_data = grouped["Genre"].dropna().unique().tolist() if not grouped.empty else []
+
+    pivot_data = {}
+    for genre in all_genres_in_data:
+        if n_x > 0:
+            gf = grouped[grouped["Genre"] == genre]
+            series = (
+                gf.set_index("Release date")
+                .reindex(x_index)        # reindex without fill_value to avoid dtype issues
+                [value_col]
+                .fillna(0)               # fill missing periods with 0
+                .astype(float)
+            )
+            pivot_data[genre] = series.tolist()
         else:
-            genre_frame = pd.DataFrame({"Release date": [], value_col: []})
-        values = genre_frame[value_col].fillna(0).tolist()
+            pivot_data[genre] = []
+
+    # ── Stable colour map keyed on overall totals ──────────────────────────────
+    overall_totals = {genre: sum(vals) for genre, vals in pivot_data.items()}
+    sorted_genres_overall = sorted(overall_totals, key=lambda g: overall_totals[g], reverse=True)
+
+    genre_color_map = {
+        genre: GENRE_PALETTE[i % len(GENRE_PALETTE)]
+        for i, genre in enumerate(sorted_genres_overall)
+    }
+
+    # ── Per-column base computation ────────────────────────────────────────────
+    # For each time-period column i, genres are sorted descending by their value in that column.
+    # Each genre's base[i] = cumulative sum of all genres with LARGER values at column i
+    # (they appear below it in the stack).
+    # Tiebreaker: overall total descending → genre with bigger lifetime total sits lower.
+    # When a genre is highlighted it is always pinned at the very bottom (base = 0).
+    base_dict = {genre: [0.0] * n_x for genre in sorted_genres_overall}
+
+    for i in range(n_x):
+        row = {g: pivot_data[g][i] for g in sorted_genres_overall if g in pivot_data}
+
+        if highlighted_genre:
+            base_dict.setdefault(highlighted_genre, [0.0] * n_x)
+            base_dict[highlighted_genre][i] = 0.0
+            highlighted_val = row.get(highlighted_genre, 0.0)
+
+            others = [g for g in sorted_genres_overall if g != highlighted_genre]
+            sorted_others = sorted(
+                others,
+                key=lambda g: (row.get(g, 0.0), overall_totals.get(g, 0.0)),
+                reverse=True,
+            )
+            cumbase = highlighted_val
+            for genre in sorted_others:
+                base_dict[genre][i] = cumbase
+                cumbase += row.get(genre, 0.0)
+        else:
+            sorted_at_i = sorted(
+                sorted_genres_overall,
+                key=lambda g: (row.get(g, 0.0), overall_totals.get(g, 0.0)),
+                reverse=True,
+            )
+            cumbase = 0.0
+            for genre in sorted_at_i:
+                base_dict[genre][i] = cumbase
+                cumbase += row.get(genre, 0.0)
+
+    # ── Build traces ────────────────────────────────────────────────────────────
+    bar_traces = []
+    line_traces = []
+
+    for genre in sorted_genres_overall:
+        if genre not in pivot_data:
+            continue
+        y_arr = pivot_data[genre]
+        base_arr = base_dict[genre]
         is_highlighted = genre == highlighted_genre
-        color = ACCENT_COLOR if is_highlighted else GENRE_PALETTE[index % len(GENRE_PALETTE)]
+        color = ACCENT_COLOR if is_highlighted else genre_color_map.get(genre, GENRE_PALETTE[0])
 
-        hoverfmt = f"{genre}<br>%{{x|%b %d, %Y}}<br>{hover_label}: %{{y:,.0f}}<extra></extra>"
+        hoverfmt = f"{genre}<br>%{{x|%b %d, %Y}}<br>{hover_label}: %{{customdata:,.0f}}<extra></extra>"
         if currency:
-            hoverfmt = f"{genre}<br>%{{x|%b %d, %Y}}<br>{hover_label}: $%{{y:,.0f}}<extra></extra>"
+            hoverfmt = f"{genre}<br>%{{x|%b %d, %Y}}<br>{hover_label}: $%{{customdata:,.0f}}<extra></extra>"
 
-        traces.append(
-            {
-                "type": "bar",
-                "name": genre,
-                "x": x_values,
-                "y": values,
-                "marker": {
-                    "color": color,
-                    "line": {"color": "#0f172a" if is_highlighted else color, "width": 1.4 if is_highlighted else 0.5},
-                    "opacity": 0.96 if is_highlighted else 0.68,
-                },
-                "hovertemplate": hoverfmt,
-            }
-        )
+        bar_traces.append({
+            "type": "bar",
+            "name": genre,
+            "x": x_values,
+            "y": y_arr,
+            "base": base_arr,
+            "customdata": y_arr,
+            "marker": {
+                "color": color,
+                "line": {"color": "#0f172a" if is_highlighted else color, "width": 1.4 if is_highlighted else 0.5},
+                "opacity": 0.96 if is_highlighted else 0.72,
+            },
+            "hovertemplate": hoverfmt,
+            "showlegend": False,
+        })
 
         if is_highlighted:
-            midpoint_values = [value / 2 for value in values]
-            traces.append(
-                {
-                    "type": "scatter",
-                    "mode": "lines+markers",
-                    "name": f"{genre} trend",
-                    "x": x_values,
-                    "y": midpoint_values,
-                    "line": {"color": "#0f172a", "width": 3},
-                    "marker": {"color": "#0f172a", "size": 6},
-                    "hoverinfo": "skip",
-                }
-            )
+            # Highlighted genre is always at base=0, so midpoint = y/2
+            midpoint_values = [v / 2 for v in y_arr]
+            line_traces.append({
+                "type": "scatter",
+                "mode": "lines+markers",
+                "name": f"{genre} trend",
+                "x": x_values,
+                "y": midpoint_values,
+                "line": {"color": "#0f172a", "width": 3},
+                "marker": {"color": "#0f172a", "size": 6},
+                "hoverinfo": "skip",
+                "showlegend": False,
+            })
+
+    # Line traces last so they render above bars
+    traces = bar_traces + line_traces
 
     yaxis = {"title": yaxis_title, "separatethousands": True, "showgrid": True}
     if currency:
         yaxis.update({"tickprefix": "$", "separatethousands": True})
 
+    tickvals, ticktext = _get_xaxis_ticks(x_values, period, selected_range)
+
     return {
         "data": traces,
         "layout": {
-            "title": {"text": title, "x": 0.02, "xanchor": "left"},
+            "title": {"text": f"<b>{title}</b>", "x": 0.02, "xanchor": "left"},
             "margin": {"l": 50, "r": 20, "t": 52, "b": 50},
             "paper_bgcolor": "rgba(0,0,0,0)",
             "plot_bgcolor": "rgba(0,0,0,0)",
-            "barmode": "stack",
+            # barmode='overlay' + explicit per-bar `base` arrays = per-column sorted stacking
+            "barmode": "overlay",
             "hovermode": "closest",
             "xaxis": {
                 "title": _period_axis_label(period),
                 "type": "date",
                 "showgrid": False,
-                "tickformatstops": _period_tickformatstops(period),
+                "tickvals": tickvals,
+                "ticktext": ticktext,
             },
             "yaxis": yaxis,
             "showlegend": False,
@@ -699,6 +857,8 @@ def _build_metric_card(label, value_id, default_value):
 
 
 # TODO: Change this in the future because now this does not make, it should use the full data range and not thte part of it
+DEFAULT_PIE_YEAR = int(games["Release date"].dropna().dt.year.max())
+
 default_start_date, default_end_date = _period_window(DEFAULT_PERIOD, END_RANGE)
 default_period_games = _filter_games(games, DEFAULT_GENRE, default_start_date, default_end_date)
 history_start_date = games["Release date"].min().normalize()
@@ -706,6 +866,7 @@ default_range_start_date = _range_start_date(DEFAULT_RANGE)
 default_market_value_figure = _build_market_value_figure(
     _filter_games(games, DEFAULT_GENRE, default_range_start_date, END_RANGE),
     DEFAULT_PERIOD,
+    DEFAULT_RANGE,
     default_range_start_date,
     END_RANGE,
 )
@@ -713,12 +874,14 @@ default_relative_market_value_figure = _build_relative_market_value_figure(
     _filter_games(games, DEFAULT_GENRE, default_range_start_date, END_RANGE),
     DEFAULT_PERIOD,
     DEFAULT_GENRE,
+    DEFAULT_RANGE,
     default_range_start_date,
     END_RANGE,
 )
 default_purchased_copies_figure = _build_purchased_copies_figure(
     _filter_games(games, DEFAULT_GENRE, default_range_start_date, END_RANGE),
     DEFAULT_PERIOD,
+    DEFAULT_RANGE,
     default_range_start_date,
     END_RANGE,
 )
@@ -726,13 +889,19 @@ default_relative_purchased_copies_figure = _build_relative_purchased_copies_figu
     _filter_games(games, DEFAULT_GENRE, default_range_start_date, END_RANGE),
     DEFAULT_PERIOD,
     DEFAULT_GENRE,
+    DEFAULT_RANGE,
     default_range_start_date,
     END_RANGE,
 )
-default_game_type_pie_figure = _build_game_type_pie_figure(default_period_games)
-default_platform_pie_figure = _build_platform_pie_figure(default_period_games)
-default_controller_pie_figure = _build_controller_support_pie_figure(default_period_games)
-default_vr_pie_figure = _build_vr_support_pie_figure(default_period_games)
+
+default_pie_start = pd.to_datetime(f"{DEFAULT_PIE_YEAR}-01-01")
+default_pie_end = pd.to_datetime(f"{DEFAULT_PIE_YEAR + 1}-01-01")
+default_pie_games = _filter_games(games, DEFAULT_GENRE, default_pie_start, default_pie_end)
+
+default_game_type_pie_figure = _build_game_type_pie_figure(default_pie_games)
+default_platform_pie_figure = _build_platform_pie_figure(default_pie_games)
+default_controller_pie_figure = _build_controller_support_pie_figure(default_pie_games)
+default_vr_pie_figure = _build_vr_support_pie_figure(default_pie_games)
 # END TODO
 
 
@@ -759,9 +928,11 @@ layout = html.Div(
                             "Genre",
                             style={
                                 "color": TEXT_SECONDARY,
-                                "fontSize": "0.85rem",
+                                "fontSize": "0.75rem",
                                 "fontWeight": "600",
-                                "marginBottom": "0.5rem",
+                                "textTransform": "uppercase",
+                                "letterSpacing": "0.06em",
+                                "marginBottom": "6px",
                             },
                         ),
                         dcc.Dropdown(
@@ -770,7 +941,7 @@ layout = html.Div(
                             value=DEFAULT_GENRE,
                             clearable=False,
                             searchable=True,
-                            style={"color": TEXT_PRIMARY},
+                            style={"maxWidth": "340px"},
                         ),
                     ]
                 ),
@@ -867,11 +1038,38 @@ layout = html.Div(
                     style=CHART_ROW_STYLE,
                 ),
                 html.Div(
-                    "Game Characteristics",
-                    style={"fontSize": "1.25rem", "fontWeight": "700", "color": TEXT_PRIMARY, "marginTop": "0.5rem"},
+                    [
+                        html.Div("Game Characteristics", style={"fontSize": "1.25rem", "fontWeight": "700", "color": TEXT_PRIMARY}),
+                        html.Div(
+                            [
+                                html.Div(
+                                    "Year",
+                                    style={
+                                        "color": TEXT_SECONDARY,
+                                        "fontSize": "0.75rem",
+                                        "fontWeight": "600",
+                                        "textTransform": "uppercase",
+                                        "letterSpacing": "0.06em",
+                                        "marginBottom": "6px",
+                                    },
+                                ),
+                                dcc.Dropdown(
+                                    id="overview-pie-year-dropdown",
+                                    options=[{"label": str(y), "value": y} for y in sorted(games["Release date"].dropna().dt.year.unique().astype(int), reverse=True) if 1997 <= y <= 2026],
+                                    value=DEFAULT_PIE_YEAR,
+                                    clearable=False,
+                                    searchable=False,
+                                    style={"width": "110px"},
+                                ),
+                            ],
+                            style={"display": "flex", "flexDirection": "column", "alignItems": "flex-end"}
+                        )
+                    ],
+                    style={"display": "flex", "justifyContent": "space-between", "alignItems": "flex-end", "marginTop": "1.5rem", "marginBottom": "1rem", "flexWrap": "wrap", "gap": "0.5rem"}
                 ),
                 html.Div(
                     [
+                        # Game Type pie
                         html.Div(
                             [
                                 dcc.Graph(
@@ -879,10 +1077,19 @@ layout = html.Div(
                                     figure=default_game_type_pie_figure,
                                     style=PIE_GRAPH_STYLE,
                                     config={"displayModeBar": False, "responsive": True},
-                                )
+                                ),
+                                html.Div(
+                                    id="overview-game-type-pie-legend",
+                                    children=_build_pie_legend(
+                                        ["Singleplayer", "Multiplayer", "Co-op"],
+                                        [1, 1, 1],
+                                        ["#3b82f6", "#10b981", "#f59e0b"],
+                                    ),
+                                ),
                             ],
                             style=PIE_CARD_STYLE,
                         ),
+                        # Platform pie
                         html.Div(
                             [
                                 dcc.Graph(
@@ -890,10 +1097,19 @@ layout = html.Div(
                                     figure=default_platform_pie_figure,
                                     style=PIE_GRAPH_STYLE,
                                     config={"displayModeBar": False, "responsive": True},
-                                )
+                                ),
+                                html.Div(
+                                    id="overview-platform-pie-legend",
+                                    children=_build_pie_legend(
+                                        ["Win only", "Win+Lin+Mac", "Win+Linux", "Win+Mac"],
+                                        [1, 1, 1, 1],
+                                        ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b"],
+                                    ),
+                                ),
                             ],
                             style=PIE_CARD_STYLE,
                         ),
+                        # Controller Support pie
                         html.Div(
                             [
                                 dcc.Graph(
@@ -901,10 +1117,19 @@ layout = html.Div(
                                     figure=default_controller_pie_figure,
                                     style=PIE_GRAPH_STYLE,
                                     config={"displayModeBar": False, "responsive": True},
-                                )
+                                ),
+                                html.Div(
+                                    id="overview-controller-pie-legend",
+                                    children=_build_pie_legend(
+                                        ["Yes", "No"],
+                                        [1, 1],
+                                        ["#3b82f6", "#cbd5e1"],
+                                    ),
+                                ),
                             ],
                             style=PIE_CARD_STYLE,
                         ),
+                        # VR Support pie
                         html.Div(
                             [
                                 dcc.Graph(
@@ -912,7 +1137,15 @@ layout = html.Div(
                                     figure=default_vr_pie_figure,
                                     style=PIE_GRAPH_STYLE,
                                     config={"displayModeBar": False, "responsive": True},
-                                )
+                                ),
+                                html.Div(
+                                    id="overview-vr-pie-legend",
+                                    children=_build_pie_legend(
+                                        ["Yes", "No"],
+                                        [1, 1],
+                                        ["#3b82f6", "#cbd5e1"],
+                                    ),
+                                ),
                             ],
                             style=PIE_CARD_STYLE,
                         ),
@@ -984,6 +1217,10 @@ def register_callbacks(app):
         Output(PLATFORM_PIE_ID, "figure"),
         Output(CONTROLLER_PIE_ID, "figure"),
         Output(VR_PIE_ID, "figure"),
+        Output("overview-game-type-pie-legend", "children"),
+        Output("overview-platform-pie-legend", "children"),
+        Output("overview-controller-pie-legend", "children"),
+        Output("overview-vr-pie-legend", "children"),
         Output(GAMES_CHANGE_ID, "children"),
         Output(MARKET_CHANGE_ID, "children"),
         Output(PURCHASED_CHANGE_ID, "children"),
@@ -1011,14 +1248,16 @@ def register_callbacks(app):
         Input(GENRE_DROPDOWN_ID, "value"),
         Input(PERIOD_STORE_ID, "data"),
         Input(RANGE_STORE_ID, "data"),
+        Input("overview-pie-year-dropdown", "value"),
     )
-    def update_metrics(selected_genre, selected_period, selected_range):
+    def update_metrics(selected_genre, selected_period, selected_range, selected_pie_year):
         start_date, end_date = _period_window(selected_period, END_RANGE)
         filtered = _filter_games(games, selected_genre, start_date, end_date)
         range_start_date = _range_start_date(selected_range)
         market_value_figure = _build_market_value_figure(
             _filter_games(games, selected_genre, range_start_date, END_RANGE),
             selected_period,
+            selected_range,
             range_start_date,
             END_RANGE,
         )
@@ -1026,12 +1265,14 @@ def register_callbacks(app):
             _filter_games(games, DEFAULT_GENRE, range_start_date, END_RANGE),
             selected_period,
             selected_genre,
+            selected_range,
             range_start_date,
             END_RANGE,
         )
         purchased_copies_figure = _build_purchased_copies_figure(
             _filter_games(games, selected_genre, range_start_date, END_RANGE),
             selected_period,
+            selected_range,
             range_start_date,
             END_RANGE,
         )
@@ -1039,14 +1280,66 @@ def register_callbacks(app):
             _filter_games(games, DEFAULT_GENRE, range_start_date, END_RANGE),
             selected_period,
             selected_genre,
+            selected_range,
             range_start_date,
             END_RANGE,
         )
-        filtered_for_pies = _filter_games(games, selected_genre, range_start_date, END_RANGE)
+        
+        pie_start_date = pd.to_datetime(f"{selected_pie_year}-01-01")
+        pie_end_date = pd.to_datetime(f"{selected_pie_year + 1}-01-01")
+        filtered_for_pies = _filter_games(games, selected_genre, pie_start_date, pie_end_date)
+
         game_type_pie_figure = _build_game_type_pie_figure(filtered_for_pies)
         platform_pie_figure = _build_platform_pie_figure(filtered_for_pies)
         controller_pie_figure = _build_controller_support_pie_figure(filtered_for_pies)
         vr_pie_figure = _build_vr_support_pie_figure(filtered_for_pies)
+
+        # ── Custom HTML legends with real values ───────────────────────────
+        cat_series = filtered_for_pies["Categories"].fillna("").astype(str)
+        singleplayer_terms = {"Single-player"}
+        multiplayer_terms = {"Multi-player", "PvP", "Online PvP", "Remote Play Together",
+                             "Cross-Platform Multiplayer", "MMO", "LAN PvP"}
+        coop_terms = {"Co-op", "Remote Play Together", "Online Co-op",
+                      "Shared/Split Screen Co-op", "LAN Co-op"}
+        game_type_values = [
+            int(cat_series.apply(lambda v: _has_any_category(v, singleplayer_terms)).astype(bool).sum()),
+            int(cat_series.apply(lambda v: _has_any_category(v, multiplayer_terms)).astype(bool).sum()),
+            int(cat_series.apply(lambda v: _has_any_category(v, coop_terms)).astype(bool).sum()),
+        ]
+        game_type_legend = _build_pie_legend(
+            ["Singleplayer", "Multiplayer", "Co-op"],
+            game_type_values,
+            ["#3b82f6", "#10b981", "#f59e0b"],
+        )
+
+        windows = filtered_for_pies["Windows"].fillna(False).astype(bool)
+        linux_col = filtered_for_pies["Linux"].fillna(False).astype(bool)
+        mac = filtered_for_pies["Mac"].fillna(False).astype(bool)
+        platform_values = [
+            int((windows & ~linux_col & ~mac).sum()),
+            int((windows & linux_col & mac).sum()),
+            int((windows & linux_col & ~mac).sum()),
+            int((windows & ~linux_col & mac).sum()),
+        ]
+        platform_legend = _build_pie_legend(
+            ["Win only", "Win+Lin+Mac", "Win+Linux", "Win+Mac"],
+            platform_values,
+            ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b"],
+        )
+
+        ctrl_terms = {"Full controller support", "Partial controller support", "Tracked Controller Support"}
+        ctrl_supported = cat_series.apply(lambda v: _has_any_category(v, ctrl_terms)).astype(bool)
+        controller_values = [int(ctrl_supported.sum()), int((~ctrl_supported).sum())]
+        controller_legend = _build_pie_legend(
+            ["Yes", "No"], controller_values, ["#3b82f6", "#cbd5e1"]
+        )
+
+        vr_terms = {"VR Only", "VR Supported", "VR Support", "SteamVR Collectibles"}
+        vr_supported = cat_series.apply(lambda v: _has_any_category(v, vr_terms)).astype(bool)
+        vr_values = [int(vr_supported.sum()), int((~vr_supported).sum())]
+        vr_legend = _build_pie_legend(
+            ["Yes", "No"], vr_values, ["#3b82f6", "#cbd5e1"]
+        )
         previous_start, previous_end = _period_window(selected_period, start_date)
         previous_filtered = _filter_games(games, selected_genre, previous_start, previous_end)
 
@@ -1103,6 +1396,10 @@ def register_callbacks(app):
             platform_pie_figure,
             controller_pie_figure,
             vr_pie_figure,
+            game_type_legend,
+            platform_legend,
+            controller_legend,
+            vr_legend,
             games_change_text,
             market_change_text,
             purchased_change_text,

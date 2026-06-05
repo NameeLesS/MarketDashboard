@@ -96,10 +96,13 @@ CHART_CARD_STYLE = {
 PIE_CARD_STYLE = {
     "backgroundColor": BG_SURFACE,
     "borderRadius": "12px",
-    "padding": "0.75rem 0.8rem 0.35rem",
+    "padding": "0.6rem 0.6rem 0.5rem",
     "border": f"1px solid {BORDER_COLOR}",
     "boxShadow": "0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1)",
-    "minHeight": "320px",
+    # Fixed total height so all four cards are identical
+    "height": "310px",
+    "display": "flex",
+    "flexDirection": "column",
 }
 
 BUTTON_BASE_STYLE = {
@@ -424,7 +427,7 @@ PLOT_CHART_STYLE = {
     "width": "100%",
 }
 
-PIE_GRAPH_STYLE = {"height": "240px"}
+PIE_GRAPH_STYLE = {"height": "210px", "flex": "1 1 0", "minHeight": 0}
 CHART_STYLE = {"height": "380px"}
 RANGE_ROW_STYLE = {"display": "flex", "flexWrap": "wrap", "gap": "0.75rem"}
 
