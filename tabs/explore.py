@@ -3,9 +3,10 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from dash import Input, Output, ctx, dash_table, dcc, html
+from dash import Input, Output, ctx, dash_table, dcc, html, no_update
 
 from styles import (
     ACCENT_COLOR,
@@ -86,11 +87,21 @@ def _load_games() -> pd.DataFrame:
         "Name", "Release date", "Estimated owners", "Peak CCU",
         "Price", "Metacritic score", "User score",
         "Positive", "Negative", "Categories", "Genres", "Tags",
+        "mds_x", "mds_y", "mds_cosine_x", "mds_cosine_y",
+        "Required age", "Discount", "DLC count", "Achievements",
+        "Recommendations", "Average playtime forever", "Average playtime two weeks",
+        "Median playtime forever", "Median playtime two weeks",
     ]
     frame = pd.read_csv(DATA_PATH, usecols=usecols, low_memory=False)
 
     frame["Release date"] = pd.to_datetime(frame["Release date"], errors="coerce")
-    for col in ["Peak CCU", "Price", "Metacritic score", "User score", "Positive", "Negative"]:
+    for col in [
+        "Peak CCU", "Price", "Metacritic score", "User score", "Positive", "Negative",
+        "mds_x", "mds_y", "mds_cosine_x", "mds_cosine_y",
+        "Required age", "Discount", "DLC count", "Achievements",
+        "Recommendations", "Average playtime forever", "Average playtime two weeks",
+        "Median playtime forever", "Median playtime two weeks",
+    ]:
         frame[col] = pd.to_numeric(frame[col], errors="coerce")
 
     bounds = frame["Estimated owners"].fillna("").astype(str).str.extract(
@@ -98,11 +109,12 @@ def _load_games() -> pd.DataFrame:
     )
     frame["Owners lower"] = pd.to_numeric(bounds["lower"], errors="coerce")
     frame["Owners upper"] = pd.to_numeric(bounds["upper"], errors="coerce")
+    frame["Owner midpoint"] = (frame["Owners lower"] + frame["Owners upper"]) / 2.0
+    frame["Income"] = frame["Owner midpoint"].fillna(0) * frame["Price"].fillna(0)
 
     for col in ["Genres", "Categories", "Tags"]:
         frame[f"_{col.lower()}_tokens"] = frame[col].fillna("").astype(str).map(_tokenize)
 
-    # Positive / Negative are fractions [0, 1]; convert to percentage for display
     frame["Positive ratings"] = frame["Positive"] * 100
     frame["Negative ratings"] = frame["Negative"] * 100
 
@@ -110,6 +122,81 @@ def _load_games() -> pd.DataFrame:
 
 
 GAMES = _load_games()
+
+
+def _get_robust_color_values(series: pd.Series) -> tuple[pd.Series, float, float]:
+    """Clip upper outliers to a robust range (e.g. 95th percentile) for heatmap coloring."""
+    numeric_series = pd.to_numeric(series, errors="coerce").fillna(0)
+    if numeric_series.empty:
+        return numeric_series, 0.0, 0.0
+    val_min = float(numeric_series.min())
+    val_max = float(numeric_series.max())
+    if val_min == val_max:
+        return numeric_series, val_min, val_max
+
+    p95 = numeric_series.quantile(0.95)
+    if p95 <= val_min:
+        p95 = numeric_series.quantile(0.99)
+    if p95 <= val_min:
+        p95 = val_max
+
+    return numeric_series.clip(upper=p95), val_min, float(p95)
+
+
+def _extract_scatter_zoom_range(relayout_data) -> tuple[float | None, float | None, float | None, float | None]:
+    """Parse scatter plot relayoutData into (x_min, x_max, y_min, y_max) zoom range."""
+    if not isinstance(relayout_data, dict):
+        return None, None, None, None
+
+    if any(k.endswith("autorange") or k == "autosize" for k in relayout_data):
+        return None, None, None, None
+
+    x0, x1, y0, y1 = None, None, None, None
+
+    if "xaxis.range" in relayout_data:
+        x_range = relayout_data["xaxis.range"]
+        if isinstance(x_range, (list, tuple)) and len(x_range) >= 2:
+            x0, x1 = x_range[0], x_range[1]
+    else:
+        x0 = relayout_data.get("xaxis.range[0]")
+        x1 = relayout_data.get("xaxis.range[1]")
+
+    if "yaxis.range" in relayout_data:
+        y_range = relayout_data["yaxis.range"]
+        if isinstance(y_range, (list, tuple)) and len(y_range) >= 2:
+            y0, y1 = y_range[0], y_range[1]
+    else:
+        y0 = relayout_data.get("yaxis.range[0]")
+        y1 = relayout_data.get("yaxis.range[1]")
+
+    try:
+        return (
+            float(x0) if x0 is not None else None,
+            float(x1) if x1 is not None else None,
+            float(y0) if y0 is not None else None,
+            float(y1) if y1 is not None else None,
+        )
+    except (TypeError, ValueError):
+        return None, None, None, None
+
+
+COLOR_COLUMN_MAP = {
+    "Price": "Price",
+    "Required age": "Required age",
+    "Estimated owners": "Owner midpoint",
+    "Peak CCU": "Peak CCU",
+    "Discount": "Discount",
+    "DLC count": "DLC count",
+    "Income": "Income",
+    "User score": "User score",
+    "Metacritic score": "Metacritic score",
+    "Achievements": "Achievements",
+    "Recommendations": "Recommendations",
+    "Average playtime forever": "Average playtime forever",
+    "Average playtime two weeks": "Average playtime two weeks",
+    "Median playtime forever": "Median playtime forever",
+    "Median playtime two weeks": "Median playtime two weeks",
+}
 
 GENRE_OPTIONS    = _multi_options(GAMES["Genres"].dropna().astype(str).str.split(",").explode())
 CATEGORY_OPTIONS = _multi_options(GAMES["Categories"].dropna().astype(str).str.split(",").explode())
@@ -235,43 +322,49 @@ def _table_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return t[list(TABLE_AVAILABLE_COLUMNS)]
 
 
-def _table_style(active_cell) -> list[dict]:
+def _table_style(active_cell, selected_game_name: str | None = None, page_data: list[dict] | None = None) -> list[dict]:
     """
     Build the style_data_conditional list for the DataTable.
 
-    Dash applies `state: active` styles after row-index styles, which would
-    reset the clicked cell back to white.  We override it explicitly for the
-    active cell so the whole row stays uniformly highlighted.
+    Highlights the row corresponding to the selected game (by name) if present in page_data.
+    Otherwise falls back to highlighting the active cell's row.
     """
     styles = [
         {"if": {"row_index": "odd"},  "backgroundColor": "#f8fafc"},
         {"if": {"row_index": "even"}, "backgroundColor": "#ffffff"},
-        # Suppress Dash's default blue outline on click / selection
         {"if": {"state": "active"},   "backgroundColor": "inherit", "border": "none", "outline": "none"},
         {"if": {"state": "selected"}, "backgroundColor": "inherit", "border": "none", "outline": "none"},
     ]
 
-    if not (isinstance(active_cell, dict) and active_cell.get("row") is not None):
-        return styles
+    highlighted_row = None
+    if selected_game_name and page_data:
+        for idx, row_dict in enumerate(page_data):
+            if row_dict.get("Name") == selected_game_name:
+                highlighted_row = idx
+                break
 
-    row = active_cell["row"]
-    col  = active_cell.get("column_id")
+    if highlighted_row is None and isinstance(active_cell, dict) and active_cell.get("row") is not None:
+        highlighted_row = active_cell["row"]
 
-    styles.append({
-        "if": {"row_index": row},
-        "backgroundColor": "#dbeafe",
-        "color": "#1e40af",
-        "borderBottom": "1px solid #93c5fd",
-    })
-
-    if col:
+    if highlighted_row is not None:
         styles.append({
-            "if": {"state": "active", "row_index": row, "column_id": col},
+            "if": {"row_index": highlighted_row},
             "backgroundColor": "#dbeafe",
             "color": "#1e40af",
-            "border": "none",
-            "outline": "none",
+            "borderBottom": "1px solid #93c5fd",
         })
+
+    if isinstance(active_cell, dict) and active_cell.get("row") is not None:
+        row = active_cell["row"]
+        col = active_cell.get("column_id")
+        if col:
+            styles.append({
+                "if": {"state": "active", "row_index": row, "column_id": col},
+                "backgroundColor": "#dbeafe",
+                "color": "#1e40af",
+                "border": "none",
+                "outline": "none",
+            })
 
     return styles
 
@@ -612,6 +705,9 @@ def _chart_card(title_text: str, graph_id: str, sort_buttons: html.Div | None = 
 
 layout = html.Div(
     [
+        dcc.Store(id="explore-scatter-dist-method", data="euclidean"),
+        dcc.Store(id="explore-selected-game", data=None),
+
         html.Div(
             [
                 html.H2(title, style=EXPLORE_PAGE_TITLE_STYLE),
@@ -739,12 +835,43 @@ layout = html.Div(
 
         html.Div(
             [
-                html.Div("Scatter Plot", style=SECTION_TITLE_STYLE),
+                html.Div(
+                    [
+                        html.Div("Scatter Plot", style=SECTION_TITLE_STYLE),
+                        html.Div(
+                            [
+                                html.Span("Distance Method: ", style={**LABEL_STYLE, "marginRight": "8px"}),
+                                html.Button("Euclidean", id="explore-scatter-dist-euclidean", n_clicks=0, style=BUTTON_ACTIVE_STYLE),
+                                html.Button("Cosine similarity", id="explore-scatter-dist-cosine", n_clicks=0, style=BUTTON_BASE_STYLE),
+                            ],
+                            style={"display": "flex", "alignItems": "center", "gap": "6px"}
+                        ),
+                        html.Div(
+                            [
+                                html.Span("Color by: ", style={**LABEL_STYLE, "marginRight": "8px"}),
+                                dcc.Dropdown(
+                                    id="explore-scatter-color-by",
+                                    options=[{"label": col, "value": col} for col in [
+                                        "Price", "Required age", "Estimated owners", "Peak CCU", "Discount", "DLC count",
+                                        "Income", "User score", "Metacritic score", "Achievements", "Recommendations",
+                                        "Average playtime forever", "Average playtime two weeks", "Median playtime forever",
+                                        "Median playtime two weeks"
+                                    ]],
+                                    value="Price",
+                                    clearable=False,
+                                    style={"width": "220px"}
+                                )
+                            ],
+                            style={"display": "flex", "alignItems": "center"}
+                        )
+                    ],
+                    style={**PLOT_CARD_HEADER_STYLE, "gap": "20px", "flexWrap": "wrap"}
+                ),
                 html.Div(
                     dcc.Graph(
                         id="explore-scatter-plot",
                         figure=_empty_figure("Scatter plot is empty for now.", height=400),
-                        config={"displayModeBar": False, "responsive": True},
+                        config={"displayModeBar": True, "responsive": True, "scrollZoom": True},
                         style=PLOT_CHART_STYLE,
                     ),
                     style=PLOT_CHART_WRAPPER_STYLE,
@@ -781,6 +908,20 @@ layout = html.Div(
 
 def register_callbacks(app):
     @app.callback(
+        Output("explore-scatter-dist-method", "data"),
+        Input("explore-scatter-dist-euclidean", "n_clicks"),
+        Input("explore-scatter-dist-cosine", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def set_scatter_dist_method(euclidean_clicks, cosine_clicks):
+        triggered = ctx.triggered_id
+        if triggered == "explore-scatter-dist-euclidean":
+            return "euclidean"
+        if triggered == "explore-scatter-dist-cosine":
+            return "cosine"
+        return no_update
+
+    @app.callback(
         Output("explore-peak-ccu-histogram",      "figure"),
         Output("explore-matches-table",           "columns"),
         Output("explore-matches-table",           "data"),
@@ -795,6 +936,9 @@ def register_callbacks(app):
         Output("explore-score-sort-meta",         "style"),
         Output("explore-ratings-sort-pos",        "style"),
         Output("explore-ratings-sort-neg",        "style"),
+        Output("explore-selected-game",           "data"),
+        Output("explore-scatter-dist-euclidean",  "style"),
+        Output("explore-scatter-dist-cosine",     "style"),
         # Filter inputs
         Input("explore-genres",                   "value"),
         Input("explore-price-min",                "value"),
@@ -823,6 +967,12 @@ def register_callbacks(app):
         Input("explore-score-sort-meta",          "n_clicks"),
         Input("explore-ratings-sort-pos",         "n_clicks"),
         Input("explore-ratings-sort-neg",         "n_clicks"),
+        # Scatter Plot and Selection inputs
+        Input("explore-scatter-plot",             "relayoutData"),
+        Input("explore-scatter-plot",             "clickData"),
+        Input("explore-scatter-dist-method",      "data"),
+        Input("explore-scatter-color-by",         "value"),
+        Input("explore-selected-game",            "data"),
     )
     def update_explore(
         genre_values, price_min, price_max,
@@ -835,6 +985,8 @@ def register_callbacks(app):
         active_cell, page_current, page_size,
         score_sort_user_clicks, score_sort_meta_clicks,
         ratings_sort_pos_clicks, ratings_sort_neg_clicks,
+        scatter_relayout_data, scatter_click_data,
+        dist_method, color_by, stored_selected_game,
     ):
         score_sort_metric = (
             "Metacritic score"
@@ -851,6 +1003,9 @@ def register_callbacks(app):
         score_meta_style    = SORT_BUTTON_SMALL_ACTIVE_STYLE if score_sort_metric   == "Metacritic score"  else SORT_BUTTON_SMALL_BASE_STYLE
         ratings_pos_style   = SORT_BUTTON_SMALL_ACTIVE_STYLE if ratings_sort_metric == "Positive ratings"  else SORT_BUTTON_SMALL_BASE_STYLE
         ratings_neg_style   = SORT_BUTTON_SMALL_ACTIVE_STYLE if ratings_sort_metric == "Negative ratings"  else SORT_BUTTON_SMALL_BASE_STYLE
+
+        euclidean_btn_style = BUTTON_ACTIVE_STYLE if dist_method == "euclidean" else BUTTON_BASE_STYLE
+        cosine_btn_style    = BUTTON_ACTIVE_STYLE if dist_method == "cosine" else BUTTON_BASE_STYLE
 
         filtered = _filter_games(
             genre_values, price_min, price_max,
@@ -872,14 +1027,28 @@ def register_callbacks(app):
             str(positive_min), str(positive_max),
         ])
 
+        x_col = "mds_x" if dist_method == "euclidean" else "mds_cosine_x"
+        y_col = "mds_y" if dist_method == "euclidean" else "mds_cosine_y"
+
+        scatter_x_min, scatter_x_max, scatter_y_min, scatter_y_max = _extract_scatter_zoom_range(scatter_relayout_data)
+
+        df_filtered_by_scatter = filtered
+        if scatter_x_min is not None and scatter_x_max is not None:
+            df_filtered_by_scatter = df_filtered_by_scatter[df_filtered_by_scatter[x_col].between(scatter_x_min, scatter_x_max)]
+        if scatter_y_min is not None and scatter_y_max is not None:
+            df_filtered_by_scatter = df_filtered_by_scatter[df_filtered_by_scatter[y_col].between(scatter_y_min, scatter_y_max)]
+
         x_min, x_max = _extract_zoom_range(relayout_data)
-        filtered_with_zoom = filtered.copy()
+        filtered_with_zoom = df_filtered_by_scatter.copy()
         filtered_with_zoom.attrs["zoom_min"] = x_min
         filtered_with_zoom.attrs["zoom_max"] = x_max
         histogram_figure = _histogram_figure(filtered_with_zoom, filter_signature)
 
+        df_filtered_by_hist = filtered
+        if x_min is not None and x_max is not None:
+            df_filtered_by_hist = df_filtered_by_hist[df_filtered_by_hist["Peak CCU"].between(x_min, x_max, inclusive="both")]
 
-        table_frame = filtered
+        table_frame = df_filtered_by_scatter
         if x_min is not None and x_max is not None:
             table_frame = table_frame[table_frame["Peak CCU"].between(x_min, x_max, inclusive="both")]
 
@@ -909,23 +1078,199 @@ def register_callbacks(app):
         table_columns   = [{"name": c, "id": c} for c in visible_columns]
         page_data       = _table_frame(table_frame.iloc[start:end])[visible_columns].to_dict("records")
 
-        selected_game = None
-        if active_cell and "row" in active_cell:
-            row_idx = start + active_cell["row"]
-            if row_idx < len(table_frame):
-                selected_game = table_frame.iloc[row_idx]["Name"]
+        selected_game = stored_selected_game
 
-        scatter_fig = _empty_figure("Scatter plot is empty for now.", height=400)
+        triggered_ids = [t.get("prop_id", "") for t in ctx.triggered]
+        if any(p.startswith("explore-matches-table.active_cell") for p in triggered_ids):
+            if active_cell and "row" in active_cell:
+                row_idx = start + active_cell["row"]
+                if row_idx < len(table_frame):
+                    selected_game = table_frame.iloc[row_idx]["Name"]
+        elif any(p.startswith("explore-scatter-plot.clickData") for p in triggered_ids):
+            if scatter_click_data and "points" in scatter_click_data:
+                point = scatter_click_data["points"][0]
+                click_custom = point.get("customdata")
+                if isinstance(click_custom, (list, tuple)) and len(click_custom) >= 2:
+                    if isinstance(click_custom[0], str):
+                        selected_game = click_custom[0]
 
-        plot_df = table_frame.dropna(subset=["Name"]).copy()
+        if selected_game and selected_game not in table_frame["Name"].values:
+            selected_game = None
+
+        plot_df = df_filtered_by_hist.dropna(subset=[x_col, y_col, "Name"]).copy()
+        
+        visible_df = plot_df
+        if scatter_x_min is not None and scatter_x_max is not None:
+            visible_df = visible_df[visible_df[x_col].between(scatter_x_min, scatter_x_max)]
+        if scatter_y_min is not None and scatter_y_max is not None:
+            visible_df = visible_df[visible_df[y_col].between(scatter_y_min, scatter_y_max)]
+
+        num_visible = len(visible_df)
+
+        if plot_df.empty:
+            scatter_fig = _empty_figure("No games match the current filters.", height=400)
+        else:
+            color_col = COLOR_COLUMN_MAP.get(color_by, "Price")
+            
+            if color_by in ["Price", "Income"]:
+                value_fmt = "$%{customdata[1]:,.2f}"
+            elif color_by in ["Peak CCU", "Estimated owners", "Recommendations", "Achievements", "DLC count", "Discount", "Required age"]:
+                value_fmt = "%{customdata[1]:,.0f}"
+            elif color_by in ["User score", "Metacritic score", "Average playtime forever", "Average playtime two weeks", "Median playtime forever", "Median playtime two weeks"]:
+                value_fmt = "%{customdata[1]:,.1f}"
+            else:
+                value_fmt = "%{customdata[1]}"
+
+            scatter_fig = go.Figure()
+
+            if num_visible > 2000:
+                grid_size = 30
+                
+                x_min_val, x_max_val = visible_df[x_col].min(), visible_df[x_col].max()
+                y_min_val, y_max_val = visible_df[y_col].min(), visible_df[y_col].max()
+                
+                if pd.isna(x_min_val) or pd.isna(x_max_val) or x_min_val == x_max_val:
+                    x_min_val, x_max_val = 0.0, 1.0
+                if pd.isna(y_min_val) or pd.isna(y_max_val) or y_min_val == y_max_val:
+                    y_min_val, y_max_val = 0.0, 1.0
+
+                x_edges = np.linspace(x_min_val, x_max_val, grid_size + 1)
+                y_edges = np.linspace(y_min_val, y_max_val, grid_size + 1)
+                x_centers = (x_edges[:-1] + x_edges[1:]) / 2
+                y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+
+                bin_df = visible_df.copy()
+                bin_df["x_bin"] = np.clip(np.digitize(bin_df[x_col], x_edges) - 1, 0, grid_size - 1)
+                bin_df["y_bin"] = np.clip(np.digitize(bin_df[y_col], y_edges) - 1, 0, grid_size - 1)
+
+                grouped = bin_df.groupby(["x_bin", "y_bin"]).agg(
+                    count=("Name", "count"),
+                    color_val=(color_col, "median"),
+                ).reset_index()
+
+                grouped["x_center"] = grouped["x_bin"].map(lambda idx: x_centers[idx])
+                grouped["y_center"] = grouped["y_bin"].map(lambda idx: y_centers[idx])
+
+                clipped_color, cmin, cmax = _get_robust_color_values(grouped["color_val"])
+
+                log_counts = np.log1p(grouped["count"])
+                min_log, max_log = log_counts.min(), log_counts.max()
+                if max_log > min_log:
+                    grouped["marker_size"] = 8 + 22 * (log_counts - min_log) / (max_log - min_log)
+                else:
+                    grouped["marker_size"] = 12
+
+                hovertemplate = f"<b>Aggregated Region</b><br>Games Count: %{{customdata[0]:,}}<br>{color_by} (Median): {value_fmt}<extra></extra>"
+
+                scatter_fig.add_trace(
+                    go.Scatter(
+                        x=grouped["x_center"],
+                        y=grouped["y_center"],
+                        mode="markers",
+                        marker={
+                            "color": clipped_color,
+                            "colorscale": "Viridis",
+                            "cmin": cmin,
+                            "cmax": cmax,
+                            "showscale": True,
+                            "size": grouped["marker_size"],
+                            "line": {"color": "rgba(255,255,255,0.6)", "width": 0.8},
+                        },
+                        customdata=np.stack([grouped["count"], grouped["color_val"].fillna(0)], axis=-1),
+                        hovertemplate=hovertemplate,
+                        name="Aggregated",
+                    )
+                )
+
+                if selected_game:
+                    selected_row = visible_df[visible_df["Name"] == selected_game]
+                    if not selected_row.empty:
+                        single_hover = f"<b>%{{text}} (Selected)</b><br>{color_by}: {value_fmt}<extra></extra>"
+                        scatter_fig.add_trace(
+                            go.Scatter(
+                                x=selected_row[x_col],
+                                y=selected_row[y_col],
+                                mode="markers",
+                                marker={
+                                    "color": COLOR_SELECTED,
+                                    "size": 12,
+                                    "line": {"color": "#000000", "width": 2},
+                                },
+                                text=selected_row["Name"],
+                                customdata=np.stack([selected_row["Name"], selected_row[color_col].fillna(0)], axis=-1),
+                                hovertemplate=single_hover,
+                                name="Selected",
+                                showlegend=False,
+                            )
+                        )
+            else:
+                clipped_color, cmin, cmax = _get_robust_color_values(visible_df[color_col])
+                hovertemplate = f"<b>%{{text}}</b><br>{color_by}: {value_fmt}<extra></extra>"
+
+                scatter_fig.add_trace(
+                    go.Scatter(
+                        x=visible_df[x_col],
+                        y=visible_df[y_col],
+                        mode="markers",
+                        marker={
+                            "color": clipped_color,
+                            "colorscale": "Viridis",
+                            "cmin": cmin,
+                            "cmax": cmax,
+                            "showscale": True,
+                            "size": 7,
+                            "line": {"color": "rgba(255,255,255,0.4)", "width": 0.5},
+                        },
+                        text=visible_df["Name"],
+                        customdata=np.stack([visible_df["Name"], visible_df[color_col].fillna(0)], axis=-1),
+                        hovertemplate=hovertemplate,
+                        name="Games",
+                    )
+                )
+
+                if selected_game:
+                    selected_row = visible_df[visible_df["Name"] == selected_game]
+                    if not selected_row.empty:
+                        scatter_fig.add_trace(
+                            go.Scatter(
+                                x=selected_row[x_col],
+                                y=selected_row[y_col],
+                                mode="markers",
+                                marker={
+                                    "color": COLOR_SELECTED,
+                                    "size": 12,
+                                    "line": {"color": "#000000", "width": 2},
+                                },
+                                text=selected_row["Name"],
+                                customdata=np.stack([selected_row["Name"], selected_row[color_col].fillna(0)], axis=-1),
+                                hovertemplate=hovertemplate,
+                                name="Selected",
+                                showlegend=False,
+                            )
+                        )
+
+            scatter_fig.update_layout(
+                template="plotly_white",
+                paper_bgcolor="#ffffff",
+                plot_bgcolor="#ffffff",
+                margin={"l": 40, "r": 20, "t": 20, "b": 40},
+                height=400,
+                xaxis={"title": "MDS X" if dist_method == "euclidean" else "MDS Cosine X", "gridcolor": "#e2e8f0"},
+                yaxis={"title": "MDS Y" if dist_method == "euclidean" else "MDS Cosine Y", "gridcolor": "#e2e8f0"},
+                uirevision="scatter-plot-revision",
+                dragmode="zoom",
+                hovermode="closest",
+            )
+
+        other_plot_df = table_frame.dropna(subset=["Name"]).copy()
 
         display_score   = _top_n_with_selection(
-            plot_df.sort_values(by=score_sort_metric,   ascending=False, na_position="last"),
+            other_plot_df.sort_values(by=score_sort_metric,   ascending=False, na_position="last"),
             selected_game, TOP_N_GAMES,
         ).sort_values(by=score_sort_metric, ascending=False, na_position="last")
 
         display_ratings = _top_n_with_selection(
-            plot_df.sort_values(by=ratings_sort_metric, ascending=False, na_position="last"),
+            other_plot_df.sort_values(by=ratings_sort_metric, ascending=False, na_position="last"),
             selected_game, TOP_N_GAMES,
         ).sort_values(by=ratings_sort_metric, ascending=False, na_position="last")
 
@@ -942,9 +1287,12 @@ def register_callbacks(app):
         return (
             histogram_figure,
             table_columns, page_data, page_count, current_page,
-            _table_style(active_cell),
+            _table_style(active_cell, selected_game, page_data),
             scatter_fig,
             score_fig, diverge_fig, ratings_fig,
             score_user_style, score_meta_style,
             ratings_pos_style, ratings_neg_style,
+            selected_game,
+            euclidean_btn_style,
+            cosine_btn_style,
         )
